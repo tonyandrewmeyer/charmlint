@@ -2,6 +2,8 @@
 
 import pathlib
 
+import pytest
+
 from charmlint._linter import lint
 from charmlint._models import Severity
 from charmlint._rules import supplychain as _supplychain
@@ -487,6 +489,21 @@ class TestOpsPinningRules:
         (tmp_charm / "requirements.txt").write_text("ops==3.7.1\n")
         report = lint(tmp_charm)
         assert [d for d in report if d.rule_id == "SUPPLYCHAIN-006"]
+
+    @pytest.mark.parametrize("plugin", [["charm"], {"a": "b"}])
+    def test_non_string_plugin_does_not_crash(self, tmp_charm: pathlib.Path, plugin: object):
+        write_charmcraft_yaml(tmp_charm, {"name": "x", "parts": {"my-charm": {"plugin": plugin}}})
+        (tmp_charm / "requirements.txt").write_text("ops==3.7.1\n")
+        report = lint(tmp_charm)
+        assert not [d for d in report if d.rule_id == "FATAL"]
+        assert [d for d in report if d.rule_id == "SUPPLYCHAIN-006"]
+
+    @pytest.mark.parametrize("part", ["uv", "poetry"])
+    def test_part_named_for_plugin_defaults_to_it(self, tmp_charm: pathlib.Path, part: str):
+        write_charmcraft_yaml(tmp_charm, {"name": "x", "parts": {part: {}}})
+        (tmp_charm / "requirements.txt").write_text("ops==3.7.1\n")
+        report = lint(tmp_charm)
+        assert not [d for d in report if d.rule_id in {"SUPPLYCHAIN-005", "SUPPLYCHAIN-006"}]
 
 
 class TestOpsDependencyParsing:

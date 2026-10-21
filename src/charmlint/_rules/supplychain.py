@@ -270,8 +270,23 @@ _LOCKFILE_PLUGINS = frozenset({"poetry", "uv"})
 _DEPENDENCY_PLUGINS = _LOCKFILE_PLUGINS | frozenset({"charm", "python"})
 
 
-def _dependency_part(metadata: models.Yaml) -> models.Yaml | None:
-    """Return the ``parts`` entry that builds the charm's Python environment.
+def _part_plugin(name: object, part: models.Yaml) -> str | None:
+    """Return the plugin craft-parts uses for a part, or ``None`` if unusable.
+
+    A part with no ``plugin:`` (or an empty one) uses the plugin named
+    after the part itself, so a bare ``uv:`` part is a ``uv`` part. A
+    ``plugin:`` that is not a string — which charmcraft would reject —
+    gives ``None`` rather than an error, so one malformed file does not
+    take every other rule's findings with it.
+    """
+    plugin = part.get("plugin").value
+    if plugin is None or plugin == "":
+        plugin = name
+    return plugin if isinstance(plugin, str) else None
+
+
+def _dependency_part(metadata: models.Yaml) -> tuple[str, models.Yaml] | None:
+    """Return the plugin and ``parts`` entry that build the charm's Python environment.
 
     A charm has at most one. Across the corpus, 329 of 655 charms
     declare exactly one part using a dependency-resolving plugin and
@@ -282,9 +297,10 @@ def _dependency_part(metadata: models.Yaml) -> models.Yaml | None:
     the common case, not an error, and the caller falls back to the
     default ``requirements.txt`` for it.
     """
-    for _, part in metadata.get("parts").items():
-        if part.get("plugin").value in _DEPENDENCY_PLUGINS:
-            return part
+    for name, part in metadata.get("parts").items():
+        plugin = _part_plugin(name, part)
+        if plugin in _DEPENDENCY_PLUGINS:
+            return plugin, part
     return None
 
 
@@ -296,11 +312,11 @@ def _requirements_files(context: models.CharmContext) -> tuple[tuple[pathlib.Pat
     from ``pyproject.toml`` and a lock file, so there is no hand-written
     requirements file to read at all.
     """
-    part = _dependency_part(context.metadata)
+    found = _dependency_part(context.metadata)
     default = ((context.charm_dir / "requirements.txt", "requirements.txt"),)
-    if part is None:
+    if found is None:
         return default
-    plugin = part.get("plugin").value
+    plugin, part = found
     if plugin in _LOCKFILE_PLUGINS:
         return ()
     if plugin == "python":
