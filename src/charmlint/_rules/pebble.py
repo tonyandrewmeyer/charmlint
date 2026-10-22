@@ -77,6 +77,11 @@ def _environment_dicts(module: models.Module) -> list[ast.Dict]:
 class PebbleEnvNonString(Rule):
     """Detect non-string literals in a Pebble layer's service ``environment``.
 
+    Pebble accepts non-string values (``None`` becomes ``""``, ``True`` becomes
+    ``"true"``), but ``ops.pebble.Layer`` keeps the Python value, so the layer
+    never equals the plan Pebble returns and a charm that compares them
+    replans on every hook.
+
     Only constant values are flagged. A value built by ``str(...)``, an
     f-string, or any other expression is left alone: the rule can't tell
     what it evaluates to, and the common cases are already strings.
@@ -105,26 +110,33 @@ class PebbleEnvNonString(Rule):
             name = _constant_key(key)
             described = f"'{name}'" if name is not None else "an environment variable"
             severity: models.Severity | None = None
+            # Pebble accepts these values (``null`` becomes "" and ``true``
+            # becomes "true"), but ``ops.pebble.Layer`` keeps the raw Python
+            # value, so the layer never compares equal to the plan Pebble
+            # returns and a charm that diffs them replans on every hook.
             if value.value is None:
                 message = (
                     f"Pebble layer environment value for {described} is None "
-                    f"— Pebble rejects the whole layer at runtime"
+                    f"— Pebble turns it into '', but the layer will not match "
+                    f"the plan Pebble returns, so comparing them always differs"
                 )
-                severity = models.Severity.ERROR
+                severity = models.Severity.WARNING
                 fix_hint = "Use a string, or omit the variable when it has no value"
             elif isinstance(value.value, bool):
                 # bool is a subclass of int, so it has to be tested first.
                 literal = str(value.value)
                 message = (
                     f"Pebble layer environment value for {described} is a bool "
-                    f"— it serialises as '{literal}', where workloads usually "
-                    f"expect '{literal.lower()}' or '{int(value.value)}'"
+                    f"— Pebble turns it into '{literal.lower()}', but the layer "
+                    f"will not match the plan Pebble returns, so comparing them "
+                    f"always differs"
                 )
                 fix_hint = f"Write the value the workload expects, e.g. '{literal.lower()}'"
             else:
                 message = (
                     f"Pebble layer environment value for {described} is not a string "
-                    f"— Pebble coerces it, but the coerced form is easy to get wrong"
+                    f"— Pebble converts it, but the layer will not match the plan "
+                    f"Pebble returns, so comparing them always differs"
                 )
                 fix_hint = f"Use a string literal, e.g. '{value.value}'"
             diagnostics.append(
