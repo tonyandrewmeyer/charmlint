@@ -72,7 +72,7 @@ class TestCLI:
         exit_code_normal = main([str(tmp_charm)])
         assert exit_code_normal == 0
         exit_code_strict = main([str(tmp_charm), "--strict"])
-        assert exit_code_strict in (0, 2)
+        assert exit_code_strict == 1
 
     def test_version(self, capsys):
         with pytest.raises(SystemExit) as exc_info:
