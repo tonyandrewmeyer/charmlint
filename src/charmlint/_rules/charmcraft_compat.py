@@ -10,6 +10,11 @@ from .. import _ast
 from .. import _models as models
 from ._base import Rule
 
+#: The part scriptlets charmcraft runs, each of which may hold shell code.
+_SCRIPTLETS = ("override-pull", "override-build", "override-stage", "override-prime")
+
+_SNAPCRAFT_SPELLING = re.compile(r"\bsnapcraftctl\b|\$\{?SNAPCRAFT_\w+")
+
 
 class DeprecatedSeries(Rule):
     """Flag the deprecated ``series`` key in charm metadata.
@@ -630,6 +635,53 @@ class LegacyBases(Rule):
                 fix_hint="Replace 'bases' with a 'base' key and a 'platforms' block",
             )
         ]
+
+
+class SnapcraftScriptlet(Rule):
+    """Flag ``snapcraftctl`` and ``$SNAPCRAFT_*`` in a part scriptlet.
+
+    Charmcraft part scriptlets (``override-pull``, ``override-build``,
+    ``override-stage`` and ``override-prime``) use ``craftctl`` and the
+    ``$CRAFT_*`` variables. ``snapcraftctl`` and ``$SNAPCRAFT_*`` are the
+    spellings snapcraft core22 and earlier used, and charmcraft supports
+    neither. A copied scriptlet either fails with "command not found" or
+    expands an unset variable to an empty string, which can copy files to
+    the wrong place. Naming it up front beats a failure minutes into
+    ``charmcraft pack``.
+    """
+
+    category = "CHARMCRAFT"
+    number = 10
+    name = "snapcraft-scriptlet"
+    description = (
+        "Part scriptlet uses snapcraftctl or $SNAPCRAFT_* instead of craftctl or $CRAFT_*"
+    )
+    default_severity = models.Severity.WARNING
+    reference_url = "https://canonical.com/juju/docs/charmcraft/stable/reference/files/charmcraft-yaml-file/#charmcraft-yaml-key-parts"
+
+    def check(self, context: models.CharmContext) -> list[models.Diagnostic]:
+        diagnostics: list[models.Diagnostic] = []
+        for part_name, part in context.metadata.get("parts").items():
+            for scriptlet in _SCRIPTLETS:
+                field = part.get(scriptlet)
+                if not isinstance(field.value, str):
+                    continue
+                if (match := _SNAPCRAFT_SPELLING.search(field.value)) is None:
+                    continue
+                diagnostics.append(
+                    self.diagnostic(
+                        f"'{scriptlet}' of part '{part_name}' uses '{match.group()}', "
+                        "which charmcraft does not support",
+                        path=field.source,
+                        line=field.line,
+                        fix_hint=(
+                            "Use 'craftctl' instead of 'snapcraftctl', and "
+                            "$CRAFT_PART_INSTALL or $CRAFT_PROJECT_DIR instead of "
+                            "$SNAPCRAFT_PART_INSTALL or $SNAPCRAFT_PROJECT_DIR"
+                        ),
+                    )
+                )
+        return diagnostics
 
 
 def _entrypoint(context: models.CharmContext) -> str:

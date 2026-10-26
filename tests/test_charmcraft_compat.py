@@ -1282,3 +1282,60 @@ class TestContainerRunsAsRoot:
             "name: test\ncontainers:\n  w:  # noqa: CHARMCRAFT-009\n    resource: img\n"
         )
         assert not _diags(lint(tmp_charm), "CHARMCRAFT-009")
+
+
+class TestSnapcraftScriptlet:
+    """Tests for CHARMCRAFT-010 — snapcraft spellings in part scriptlets."""
+
+    def _lint(self, charm: pathlib.Path, parts: dict) -> list[Diagnostic]:
+        write_charmcraft_yaml(charm, {"name": "test", "parts": parts})
+        return [d for d in lint(charm) if d.rule_id == "CHARMCRAFT-010"]
+
+    def test_snapcraftctl_is_flagged(self, tmp_charm: pathlib.Path):
+        diags = self._lint(
+            tmp_charm,
+            {"charm": {"plugin": "charm", "override-build": "snapcraftctl build\n"}},
+        )
+        assert len(diags) == 1
+        assert diags[0].severity == Severity.WARNING
+        assert diags[0].path == "charmcraft.yaml"
+        assert "snapcraftctl" in diags[0].message
+        assert "override-build" in diags[0].message
+
+    def test_snapcraft_variable_is_flagged(self, tmp_charm: pathlib.Path):
+        diags = self._lint(
+            tmp_charm,
+            {"x": {"plugin": "nil", "override-prime": "cp a $SNAPCRAFT_PART_INSTALL/a"}},
+        )
+        assert len(diags) == 1
+        assert "$SNAPCRAFT_PART_INSTALL" in diags[0].message
+
+    def test_braced_variable_is_flagged(self, tmp_charm: pathlib.Path):
+        diags = self._lint(
+            tmp_charm,
+            {"x": {"plugin": "nil", "override-stage": "cp a ${SNAPCRAFT_PROJECT_DIR}/a"}},
+        )
+        assert len(diags) == 1
+
+    def test_craftctl_is_fine(self, tmp_charm: pathlib.Path):
+        diags = self._lint(
+            tmp_charm,
+            {
+                "x": {
+                    "plugin": "nil",
+                    "override-build": "craftctl default\ncp a $CRAFT_PART_INSTALL",
+                }
+            },
+        )
+        assert diags == []
+
+    def test_other_fields_are_not_scanned(self, tmp_charm: pathlib.Path):
+        diags = self._lint(
+            tmp_charm,
+            {"x": {"plugin": "nil", "build-environment": [{"SNAPCRAFT_X": "1"}]}},
+        )
+        assert diags == []
+
+    def test_no_parts(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        assert "CHARMCRAFT-010" not in {d.rule_id for d in lint(tmp_charm)}
