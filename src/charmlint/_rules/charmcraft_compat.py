@@ -307,6 +307,67 @@ class UnknownResourceField(Rule):
         return diagnostics
 
 
+class InvalidStorage(Rule):
+    """Flag storage definitions that ``juju deploy`` will reject.
+
+    ``charmcraft pack`` does not validate the ``storage`` block, so a
+    definition with a bad ``type`` packs cleanly and only fails at deploy
+    time. Juju accepts only ``filesystem`` and ``block`` as storage types
+    (the mount point key is ``location``, not ``directory``). An
+    unrecognised key inside a definition is reported as a warning, as
+    CHARMCRAFT-005 does for resources.
+    """
+
+    category = "CHARMCRAFT"
+    number = 10
+    name = "invalid-storage"
+    description = "Storage definition that Juju will not accept"
+    default_severity = models.Severity.ERROR
+    reference_url = "https://canonical.com/juju/docs/charmcraft/stable/reference/files/charmcraft-yaml-file/#charmcraft-yaml-key-storage"
+
+    def check(self, context: models.CharmContext) -> list[models.Diagnostic]:
+        diagnostics: list[models.Diagnostic] = []
+        for storage_name, storage in context.metadata.get("storage").items():
+            storage_type = storage.get("type")
+            if not storage_type.present:
+                diagnostics.append(
+                    self.diagnostic(
+                        f"Storage '{storage_name}' has no 'type' — Juju requires one",
+                        path=storage.source,
+                        line=storage.line,
+                        fix_hint="Set 'type' to 'filesystem' or 'block'",
+                    )
+                )
+            elif storage_type.value not in _STORAGE_TYPES:
+                diagnostics.append(
+                    self.diagnostic(
+                        f"Storage '{storage_name}' has type '{storage_type.value}' — "
+                        "Juju only accepts 'filesystem' and 'block'",
+                        path=storage_type.source,
+                        line=storage_type.line,
+                        fix_hint="Set 'type' to 'filesystem' or 'block'",
+                    )
+                )
+            for key, field in storage.items():
+                if key in _KNOWN_STORAGE_FIELDS:
+                    continue
+                hint = (
+                    "location"
+                    if key == "directory"
+                    else _suggest_closest(key, _KNOWN_STORAGE_FIELDS)
+                )
+                diagnostics.append(
+                    self.diagnostic(
+                        f"Unrecognised field '{key}' in storage '{storage_name}'",
+                        severity=models.Severity.WARNING,
+                        path=field.source,
+                        line=field.line,
+                        fix_hint=hint,
+                    )
+                )
+        return diagnostics
+
+
 class OpsMainCall(Rule):
     """Check that a charm's entrypoint calls ``ops.main()``.
 
@@ -814,6 +875,20 @@ _KNOWN_RESOURCE_FIELDS: frozenset[str] = frozenset({
     "description",
     "filename",
     "upstream-source",
+})
+
+
+# Storage types Juju accepts, and the keys recognised inside ``storage.<name>``.
+_STORAGE_TYPES: frozenset[str] = frozenset({"filesystem", "block"})
+_KNOWN_STORAGE_FIELDS: frozenset[str] = frozenset({
+    "type",
+    "description",
+    "location",
+    "shared",
+    "read-only",
+    "multiple",
+    "minimum-size",
+    "properties",
 })
 
 

@@ -35,6 +35,7 @@ config file overrides it per rule.
 | [CHARMCRAFT-007](#charmcraft-007-legacy-bases) | `legacy-bases` | Info | Legacy 'bases' block instead of 'base' and 'platforms' |
 | [CHARMCRAFT-008](#charmcraft-008-charm-user) | `charm-user` | Warning | Kubernetes charm runs its hooks as root, or declares an invalid 'charm-user' |
 | [CHARMCRAFT-009](#charmcraft-009-container-runs-as-root) | `container-runs-as-root` | Warning | Workload container runs as root, has mismatched uid/gid, or uses a nonstandard identity |
+| [CHARMCRAFT-010](#charmcraft-010-invalid-storage) | `invalid-storage` | Error | Storage definition that Juju will not accept |
 | [CONFIG-001](#config-001-config-missing-type) | `config-missing-type` | Warning | Config option is missing a type |
 | [CONFIG-002](#config-002-config-missing-default) | `config-missing-default` | Info | Config option is missing a default value |
 | [CONFIG-003](#config-003-config-missing-description) | `config-missing-description` | Warning | Config option is missing a description |
@@ -296,6 +297,21 @@ same as elsewhere in this module: a malformed section is not a
 privilege finding.
 
 Reference: <https://canonical.com/juju/docs/charmcraft/stable/reference/files/charmcraft-yaml-file/#charmcraft-yaml-key-containers>
+
+### CHARMCRAFT-010 invalid-storage
+
+**Error** — Storage definition that Juju will not accept
+
+Flag storage definitions that `juju deploy` will reject.
+
+`charmcraft pack` does not validate the `storage` block, so a
+definition with a bad `type` packs cleanly and only fails at deploy
+time. Juju accepts only `filesystem` and `block` as storage types
+(the mount point key is `location`, not `directory`). An
+unrecognised key inside a definition is reported as a warning, as
+CHARMCRAFT-005 does for resources.
+
+Reference: <https://canonical.com/juju/docs/charmcraft/stable/reference/files/charmcraft-yaml-file/#charmcraft-yaml-key-storage>
 
 ## CONFIG
 

@@ -1282,3 +1282,40 @@ class TestContainerRunsAsRoot:
             "name: test\ncontainers:\n  w:  # noqa: CHARMCRAFT-009\n    resource: img\n"
         )
         assert not _diags(lint(tmp_charm), "CHARMCRAFT-009")
+
+
+class TestInvalidStorage:
+    """Tests for CHARMCRAFT-010 — storage definitions Juju will not accept."""
+
+    def _diags(self, tmp_charm: pathlib.Path, storage: dict) -> list[Diagnostic]:
+        write_charmcraft_yaml(tmp_charm, {"name": "test", "storage": storage})
+        return [d for d in list(lint(tmp_charm)) if d.rule_id == "CHARMCRAFT-010"]
+
+    def test_valid_storage(self, tmp_charm: pathlib.Path):
+        storage = {
+            "data": {"type": "filesystem", "location": "/data", "minimum-size": "1G"},
+            "disk": {"type": "block", "multiple": "0-3", "properties": ["transient"]},
+        }
+        assert self._diags(tmp_charm, storage) == []
+
+    def test_file_type_is_an_error(self, tmp_charm: pathlib.Path):
+        diags = self._diags(tmp_charm, {"config": {"type": "file", "location": "/etc/x"}})
+        assert len(diags) == 1
+        assert diags[0].severity == Severity.ERROR
+        assert "'file'" in diags[0].message
+        assert "config" in diags[0].message
+
+    def test_missing_type(self, tmp_charm: pathlib.Path):
+        diags = self._diags(tmp_charm, {"data": {"location": "/data"}})
+        assert len(diags) == 1
+        assert diags[0].severity == Severity.ERROR
+
+    def test_directory_key_suggests_location(self, tmp_charm: pathlib.Path):
+        diags = self._diags(tmp_charm, {"data": {"type": "filesystem", "directory": "/d"}})
+        assert len(diags) == 1
+        assert diags[0].severity == Severity.WARNING
+        assert diags[0].fix_hint == "location"
+
+    def test_no_storage(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        assert "CHARMCRAFT-010" not in {d.rule_id for d in list(lint(tmp_charm))}
