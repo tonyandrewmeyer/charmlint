@@ -7,6 +7,8 @@ level. Accepting the wrong spelling in the wrong file would silently
 paper over a real misplacement.
 """
 
+import pathlib
+import re
 import urllib.parse
 
 from .. import _models as models
@@ -355,3 +357,90 @@ class CircularWebsiteLink(Rule):
                     )
                 )
         return diagnostics
+
+
+class DiscourseDocsLink(Rule):
+    """Flag a documentation link that still points at Charmhub Discourse.
+
+    Charm documentation has moved from Discourse topics to Sphinx projects
+    published on Read the Docs. When the charm ships a ``docs/conf.py``, the
+    documentation link should follow it: the docs pull request touches only
+    ``docs/``, so the link is easy to leave behind. When ``conf.py`` sets
+    ``ogp_site_url`` or ``html_baseurl``, the message suggests that value.
+
+    A docs project that exists but is not published yet is a false positive;
+    silence it with ``noqa`` until it is.
+    """
+
+    category = "METADATA"
+    number = 11
+    name = "discourse-docs-link"
+    description = "Documentation link points at Discourse although the charm has a docs project"
+    default_severity = models.Severity.WARNING
+    reference_url = "https://canonical.com/juju/docs/charmcraft/stable/reference/files/charmcraft-yaml-file/#charmcraft-yaml-key-links"
+
+    def check(self, context: models.CharmContext) -> list[models.Diagnostic]:
+        if _is_bundle(context):
+            return []
+        key = "links.documentation" if _is_charmcraft(context) else "docs"
+        node = _resolve(context.metadata, key)
+        # Both files accept a single URL or a list of them.
+        links = node.elements if node.elements is not None else [node]
+        discourse = [
+            link for link in links if isinstance(link.value, str) and _is_discourse_url(link.value)
+        ]
+        if not discourse:
+            return []
+        conf = _find_docs_conf(context.charm_dir)
+        if conf is None:
+            return []
+        suggestion = _published_url(conf)
+        hint = (
+            f"Point '{key}' at the published docs: {suggestion}"
+            if suggestion
+            else f"Point '{key}' at the docs project's published URL"
+        )
+        return [
+            self.diagnostic(
+                f"'{key}' still points at Discourse ({link.value}), but the charm has a "
+                "Sphinx docs project",
+                path=link.source,
+                line=link.line,
+                fix_hint=hint,
+            )
+            for link in discourse
+        ]
+
+
+def _is_discourse_url(url: str) -> bool:
+    """Report whether *url* is on Charmhub's Discourse."""
+    candidate = url.strip()
+    if "://" not in candidate:
+        candidate = f"//{candidate}"
+    try:
+        host = urllib.parse.urlsplit(candidate).hostname
+    except ValueError:
+        return False
+    return host is not None and host.lower() == "discourse.charmhub.io"
+
+
+def _find_docs_conf(charm_dir: pathlib.Path) -> pathlib.Path | None:
+    """Find the Sphinx ``conf.py`` for the charm, or for the monorepo it is in."""
+    for directory in (charm_dir, charm_dir.parent):
+        conf = directory / "docs" / "conf.py"
+        if conf.is_file():
+            return conf
+    return None
+
+
+def _published_url(conf: pathlib.Path) -> str | None:
+    """Return the published URL that ``conf.py`` assigns, if it is a plain literal."""
+    try:
+        text = conf.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    for setting in ("ogp_site_url", "html_baseurl"):
+        match = re.search(rf"^{setting}\s*=\s*(['\"])(?P<url>[^'\"]+)\1", text, re.MULTILINE)
+        if match:
+            return match.group("url")
+    return None

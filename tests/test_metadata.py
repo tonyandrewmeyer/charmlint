@@ -263,3 +263,48 @@ class TestCircularWebsiteLink:
         write_charmcraft_yaml(tmp_charm, {"links": {"website": "https://charmhub.io/test-charm"}})
         report = lint(tmp_charm)
         assert "METADATA-010" not in {d.rule_id for d in report}
+
+
+class TestDiscourseDocsLink:
+    """Tests for METADATA-011 — documentation link still on Discourse."""
+
+    def test_fires_with_docs_project(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(
+            tmp_charm,
+            {"name": "x", "links": {"documentation": "https://discourse.charmhub.io/t/x/123"}},
+        )
+        (tmp_charm / "docs").mkdir()
+        (tmp_charm / "docs" / "conf.py").write_text('ogp_site_url = "https://x.readthedocs.io/"\n')
+        report = lint(tmp_charm)
+        hits = [d for d in list(report) if d.rule_id == "METADATA-011"]
+        assert len(hits) == 1
+        assert hits[0].severity == Severity.WARNING
+        assert "https://x.readthedocs.io/" in (hits[0].fix_hint or "")
+
+    def test_fires_without_suggestion(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(
+            tmp_charm,
+            {"name": "x", "links": {"documentation": "https://discourse.charmhub.io/t/x/123"}},
+        )
+        (tmp_charm / "docs").mkdir()
+        (tmp_charm / "docs" / "conf.py").write_text("project = 'x'\n")
+        report = lint(tmp_charm)
+        assert [d for d in list(report) if d.rule_id == "METADATA-011"]
+
+    def test_silent_without_docs_project(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(
+            tmp_charm,
+            {"name": "x", "links": {"documentation": "https://discourse.charmhub.io/t/x/123"}},
+        )
+        report = lint(tmp_charm)
+        assert "METADATA-011" not in {d.rule_id for d in report}
+
+    def test_silent_for_published_docs(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(
+            tmp_charm,
+            {"name": "x", "links": {"documentation": "https://x.readthedocs.io/"}},
+        )
+        (tmp_charm / "docs").mkdir()
+        (tmp_charm / "docs" / "conf.py").write_text("project = 'x'\n")
+        report = lint(tmp_charm)
+        assert "METADATA-011" not in {d.rule_id for d in report}
