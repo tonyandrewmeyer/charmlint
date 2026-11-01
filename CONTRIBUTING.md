@@ -10,17 +10,16 @@ Set up a dev environment and run the tests with [uv](https://docs.astral.sh/uv/)
 
 ```bash
 uv sync
-uv run pytest
+make test
 ```
 
-Tests that need the network (the reference-URL checks) are deselected by default; run them with `uv run pytest -m network`.
+Tests that need the network (the reference-URL checks) are deselected by default; run them with `make test-network`.
 
 Lint, format, and type-check:
 
 ```bash
-uv run ruff check
-uv run ruff format --check
-uv run ty check
+make lint      # ruff check, ruff format --check, ty check
+make format    # apply ruff formatting and safe fixes
 ```
 
 `pre-commit` runs the same checks (config in `.pre-commit-config.yaml`).

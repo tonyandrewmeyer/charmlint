@@ -15,20 +15,19 @@ The `dev` [Workshop](https://ubuntu.com/workshop) in `.workshop/` has the same t
 ## Tests
 
 ```bash
-uv run pytest
+make test
 ```
 
-Tests that need the network (the reference-URL checks) are deselected by default; run them with `-m network`.
+Tests that need the network (the reference-URL checks) are deselected by default; run them with `make test-network`.
 
 ## Lint
 
 ```bash
-uv run ruff check
-uv run ruff format --check
-uv run ty check
+make lint      # ruff check, ruff format --check, ty check
+make format    # apply ruff formatting and safe fixes
 ```
 
-`pre-commit` runs the same tools through `uv run` (config in `.pre-commit-config.yaml`); tool versions live in `pyproject.toml`'s `dev` dependency group.
+`pre-commit` runs the same `make` targets (config in `.pre-commit-config.yaml`); tool versions live in `pyproject.toml`'s `dev` dependency group.
 
 ## Rule reference
 
