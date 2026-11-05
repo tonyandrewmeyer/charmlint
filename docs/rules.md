@@ -186,6 +186,13 @@ handing it to an interpreter — may not carry the executable bit.
 An entrypoint passed to `python3` needs no such bit, and is not
 reported for lacking one.
 
+Without a hand-written `dispatch`, charmcraft's generated one execs
+`charm-entrypoint` (default `src/charm.py`) directly. If that file
+is missing the charm packs and deploys, but no hook ever runs and the
+unit stays at `unknown`; if it is not executable, every hook fails.
+Both are reported. In a git repository the executable bit is read
+from the mode git has recorded (`100755`), not the working tree.
+
 Anything the script does not spell out statically is left alone: a
 command built from a shell variable, a path leading outside the
 charm, or a `dispatch` whose last statement does not run a

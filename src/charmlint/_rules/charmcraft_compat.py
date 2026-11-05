@@ -4,6 +4,7 @@ import ast
 import os
 import pathlib
 import re
+import subprocess  # ruff: ignore[S404]
 from collections.abc import Iterator
 
 from .. import _ast
@@ -120,7 +121,7 @@ class Entrypoint(Rule):
         # not have one. Only a hand-written dispatch is worth checking.
         dispatch = context.charm_dir / "dispatch"
         if not dispatch.is_file():
-            return []
+            return self._check_generated_dispatch(context)
         try:
             # Decoding never fails (errors="replace"), so this is only the
             # environmental cases — unreadable mode, I/O error — where the
@@ -156,6 +157,41 @@ class Entrypoint(Rule):
             return [
                 self.diagnostic(
                     f"Entrypoint '{entrypoint_rel}' is not executable",
+                    path=entrypoint_rel,
+                    fix_hint=f"Run: chmod +x {entrypoint_rel}",
+                )
+            ]
+        return []
+
+    def _check_generated_dispatch(self, context: models.CharmContext) -> list[models.Diagnostic]:
+        """Check the entrypoint that charmcraft's generated dispatch will exec.
+
+        Without a hand-written ``dispatch``, charmcraft generates one that runs
+        ``charm-entrypoint`` (default ``src/charm.py``) directly. If that file
+        is missing the charm packs and deploys but no hook ever runs.
+        """
+        entrypoint_rel = _entrypoint(context)
+        entrypoint = context.charm_dir / entrypoint_rel
+        if not entrypoint.exists():
+            return [
+                self.diagnostic(
+                    f"Charm has no dispatch and its entrypoint '{entrypoint_rel}' does not "
+                    "exist, so no hook will run",
+                    path=entrypoint_rel,
+                    fix_hint=f"Create {entrypoint_rel}, or set 'charm-entrypoint' in the charm part",
+                )
+            ]
+        if not entrypoint.is_file():
+            return [
+                self.diagnostic(
+                    f"Entrypoint '{entrypoint_rel}' is not a regular file",
+                    path=entrypoint_rel,
+                )
+            ]
+        if not _is_executable(context.charm_dir, entrypoint_rel):
+            return [
+                self.diagnostic(
+                    f"Entrypoint '{entrypoint_rel}' is not executable, so every hook will fail",
                     path=entrypoint_rel,
                     fix_hint=f"Run: chmod +x {entrypoint_rel}",
                 )
@@ -630,6 +666,29 @@ class LegacyBases(Rule):
                 fix_hint="Replace 'bases' with a 'base' key and a 'platforms' block",
             )
         ]
+
+
+def _is_executable(charm_dir: pathlib.Path, relative: str) -> bool:
+    """Return whether ``relative`` is executable.
+
+    Inside a git repository the mode git has recorded (``100755``) is what
+    ends up in the packed charm, and is unaffected by ``core.fileMode=false``
+    or a filesystem without permission bits. Otherwise use the filesystem.
+    """
+    try:
+        result = subprocess.run(  # ruff: ignore[S603]
+            ["git", "ls-files", "-s", "--", relative],  # ruff: ignore[S607]
+            cwd=charm_dir,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        result = None
+    if result is not None and result.returncode == 0 and result.stdout.strip():
+        return result.stdout.split()[0] == "100755"
+    return os.access(charm_dir / relative, os.X_OK)
 
 
 def _entrypoint(context: models.CharmContext) -> str:

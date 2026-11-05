@@ -1,6 +1,7 @@
 """Tests for charmcraft-compatible rules."""
 
 import pathlib
+import subprocess
 
 from charmlint._linter import lint
 from charmlint._models import CharmContext, Diagnostic, LintReport, Severity
@@ -235,10 +236,51 @@ class TestEntrypoint:
         assert len(diags) == 1
         assert "does not exist" in diags[0].message
 
-    def test_no_dispatch(self, tmp_charm: pathlib.Path):
+    def test_no_dispatch_with_entrypoint(self, tmp_charm: pathlib.Path):
         write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_entrypoint(tmp_charm)
         report = lint(tmp_charm)
         assert "CHARMCRAFT-003" not in {d.rule_id for d in list(report)}
+
+    def test_no_dispatch_no_entrypoint(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        report = lint(tmp_charm)
+        diags = [d for d in list(report) if d.rule_id == "CHARMCRAFT-003"]
+        assert len(diags) == 1
+        assert diags[0].severity == Severity.ERROR
+        assert "src/charm.py" in diags[0].message
+
+    def test_no_dispatch_custom_entrypoint_missing(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(
+            tmp_charm,
+            {"name": "test", "parts": {"charm": {"charm-entrypoint": "src/main.py"}}},
+        )
+        write_entrypoint(tmp_charm)
+        report = lint(tmp_charm)
+        diags = [d for d in list(report) if d.rule_id == "CHARMCRAFT-003"]
+        assert len(diags) == 1
+        assert "src/main.py" in diags[0].message
+
+    def test_no_dispatch_entrypoint_not_executable(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_entrypoint(tmp_charm, executable=False)
+        report = lint(tmp_charm)
+        diags = [d for d in list(report) if d.rule_id == "CHARMCRAFT-003"]
+        assert len(diags) == 1
+        assert "not executable" in diags[0].message
+        assert diags[0].fix_hint == "Run: chmod +x src/charm.py"
+
+    def test_no_dispatch_uses_mode_recorded_by_git(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_entrypoint(tmp_charm)
+        git = ["git", "-C", str(tmp_charm)]
+        subprocess.run([*git, "init", "-q"], check=True)  # ruff: ignore[S603]
+        subprocess.run([*git, "add", "src/charm.py"], check=True)  # ruff: ignore[S603]
+        subprocess.run([*git, "update-index", "--chmod=-x", "src/charm.py"], check=True)  # ruff: ignore[S603]
+        report = lint(tmp_charm)
+        diags = [d for d in list(report) if d.rule_id == "CHARMCRAFT-003"]
+        assert len(diags) == 1
+        assert "not executable" in diags[0].message
 
     def test_dispatch_without_exec(self, tmp_charm: pathlib.Path):
         write_charmcraft_yaml(tmp_charm, {"name": "test"})
