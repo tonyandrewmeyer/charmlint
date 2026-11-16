@@ -71,6 +71,7 @@ config file overrides it per rule.
 | [STRUCTURE-001](#structure-001-no-licence) | `no-licence` | Info | No LICENSE/LICENCE file found |
 | [STRUCTURE-002](#structure-002-no-icon) | `no-icon` | Info | No icon.svg found |
 | [STRUCTURE-003](#structure-003-no-type-annotations) | `no-type-annotations` | Info | No type annotations found in charm source |
+| [STRUCTURE-004](#structure-004-charm-workload-separation) | `charm-workload-separation` | Info | Charm and workload logic mixed in one module |
 | [SUPPLYCHAIN-001](#supplychain-001-oci-image-missing-upstream-source) | `oci-image-missing-upstream-source` | Info | oci-image resource declared without an 'upstream-source' |
 | [SUPPLYCHAIN-005](#supplychain-005-ops-dependency-unpinned) | `ops-dependency-unpinned` | Warning | ops dependency has no version specifier |
 | [SUPPLYCHAIN-006](#supplychain-006-ops-dependency-exactly-pinned) | `ops-dependency-exactly-pinned` | Info | ops dependency pinned with `==` |
@@ -960,6 +961,41 @@ assignment. Only the charm's own source counts. That is `src/` plus
 any library the charm publishes, but not a vendored copy of someone
 else's library, and not the tests. A charm with no functions has
 nothing to annotate and is not reported.
+
+### STRUCTURE-004 charm-workload-separation
+
+**Info** — Charm and workload logic mixed in one module
+
+Check that charm logic and workload logic live in separate modules.
+
+The entrypoint is where events are observed, config is turned into
+arguments and status is reported; the commands that actually change
+the machine belong in a workload module of their own. Keeping them
+apart is what lets a charm be unit tested by mocking the workload
+module instead of patching `subprocess` in every state test.
+
+Two shapes are reported: the entrypoint running commands itself,
+and a module under `src/` that imports `ops` — any submodule,
+`ops.pebble` included — and also runs commands. A module may do
+either on its own: a workload module runs commands without knowing
+anything about ops, and a helper module may import ops without
+running anything.
+
+Running commands means `subprocess`, `os.system` and the
+`os.spawn*`/`os.exec*` families. Not every command is workload
+work: Juju's own hook tools (`relation-get`, `open-port`, …)
+talk to the controller rather than the machine, and a read-only
+command such as `dig` or `lsb_release` only asks the machine
+something — neither changes it, so neither is reported. A command
+whose name is built at runtime is not assumed to be either. The
+entrypoint is the file charmcraft designates
+(`parts.charm.charm-entrypoint`, defaulting to `src/charm.py`),
+and only `src/` is examined otherwise. A Kubernetes workload module
+that reaches its container through Pebble without running commands is
+not reported — that is the standard way to talk to a container — and
+neither are filesystem writes or HTTP calls to a workload.
+
+Reference: <https://canonical.com/juju/docs/ops/latest/howto/run-workloads-with-a-charm-machines/>
 
 ## SUPPLYCHAIN
 

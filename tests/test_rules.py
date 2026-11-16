@@ -386,6 +386,234 @@ class Charm(ops.CharmBase):
         (unit / "test_charm.py").write_text("def test_thing() -> None:\n    pass\n")
         assert "STRUCTURE-003" in {d.rule_id for d in lint(tmp_charm)}
 
+    def test_entrypoint_runs_commands(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import subprocess
+
+import ops
+
+
+class Charm(ops.CharmBase):
+    def _on_install(self, event):
+        subprocess.run(["systemctl", "restart", "app"])
+
+
+ops.main(Charm)
+""",
+        )
+        report = [d for d in lint(tmp_charm) if d.rule_id == "STRUCTURE-004"]
+        assert len(report) == 1
+        assert report[0].severity == Severity.INFO
+        assert report[0].path == "src/charm.py"
+        assert "runs commands directly" in report[0].message
+        assert "imports ops" not in report[0].message
+
+    def test_entrypoint_runs_commands_without_ops(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            'import subprocess\n\nprint(subprocess.check_output(["apt", "install", "-y", "nginx"]))\n',
+        )
+        assert "STRUCTURE-004" in {d.rule_id for d in lint(tmp_charm)}
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param(
+                "import subprocess\n\nimport ops\n\n\ndef restart():\n"
+                '    subprocess.Popen(["systemctl", "restart", "app"])\n',
+                id="ops",
+            ),
+            pytest.param(
+                "import subprocess\n\nfrom ops.model import ActiveStatus\n\n\ndef restart():\n"
+                '    subprocess.check_call(["systemctl", "restart", "app"])\n',
+                id="ops-submodule",
+            ),
+            pytest.param(
+                "import subprocess\n\nimport ops.pebble\n\n\ndef restart():\n"
+                '    subprocess.run(["systemctl", "restart", "app"])\n',
+                id="ops-pebble",
+            ),
+            pytest.param(
+                "import os\n\nimport ops\n\n\ndef restart():\n"
+                '    os.system("systemctl restart app")\n',
+                id="os-system",
+            ),
+        ],
+    )
+    def test_ops_module_runs_commands(self, tmp_charm: pathlib.Path, source: str):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            "import ops\n\n\nclass Charm(ops.CharmBase):\n    pass\n\n\nops.main(Charm)\n",
+        )
+        write_charm_source(tmp_charm, source, filename="workload.py")
+        report = [d for d in lint(tmp_charm) if d.rule_id == "STRUCTURE-004"]
+        assert len(report) == 1
+        assert report[0].path == "src/workload.py"
+
+    def test_custom_entrypoint_runs_commands(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(
+            tmp_charm,
+            {"name": "test", "parts": {"charm": {"charm-entrypoint": "src/main.py"}}},
+        )
+        write_charm_source(
+            tmp_charm,
+            'import subprocess\n\nprint(subprocess.run(["systemctl", "restart", "app"]))\n',
+            filename="main.py",
+        )
+        write_charm_source(
+            tmp_charm,
+            "import ops\n\n\nclass Charm(ops.CharmBase):\n    pass\n\n\nops.main(Charm)\n",
+        )
+        report = [d for d in lint(tmp_charm) if d.rule_id == "STRUCTURE-004"]
+        assert [d.path for d in report] == ["src/main.py"]
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param(
+                "import ops\n\n\nclass Charm(ops.CharmBase):\n    pass\n\n\nops.main(Charm)\n",
+                id="no-commands",
+            ),
+            pytest.param(
+                "import subprocess\n\nimport ops\n\n\nclass Charm(ops.CharmBase):\n    pass\n"
+                "\n\nops.main(Charm)\n",
+                id="subprocess-imported-not-called",
+            ),
+        ],
+    )
+    def test_entrypoint_without_commands_no_diagnostic(self, tmp_charm: pathlib.Path, source: str):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(tmp_charm, source)
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param("import ops\n\n\nSTATUS = ops.ActiveStatus\n", id="no-commands"),
+            pytest.param(
+                "import subprocess\n\n\ndef restart():\n"
+                '    subprocess.run(["systemctl", "restart", "app"])\n',
+                id="no-ops",
+            ),
+            pytest.param(
+                "import ops.pebble\n\n\ndef layer(container):\n"
+                "    return container.get_plan().services\n",
+                id="pebble-only",
+            ),
+        ],
+    )
+    def test_workload_module_without_mix_no_diagnostic(self, tmp_charm: pathlib.Path, source: str):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            "import ops\n\n\nclass Charm(ops.CharmBase):\n    pass\n\n\nops.main(Charm)\n",
+        )
+        write_charm_source(tmp_charm, source, filename="workload.py")
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param(
+                "import subprocess\n\nimport ops\n\n\ndef peers():\n"
+                '    cmd = ["relation-list", "--format=json", "-r", "1"]\n'
+                "    return subprocess.check_output(cmd)\n",
+                id="hook-tool-in-variable",
+            ),
+            pytest.param(
+                "from subprocess import check_call\n\nimport ops\n\n\ndef open_port():\n"
+                '    check_call(["open-port", "6000/TCP"])\n',
+                id="hook-tool-from-import",
+            ),
+            pytest.param(
+                "import subprocess\n\nimport ops\n\n\ndef release():\n"
+                '    return subprocess.check_output(["lsb_release", "-r", "-s"])\n',
+                id="read-only-os-query",
+            ),
+            pytest.param(
+                "import subprocess\n\nimport ops\n\n\ndef lookup(query):\n"
+                '    return subprocess.run(["dig"] + query.split(), capture_output=True)\n',
+                id="read-only-dns-probe",
+            ),
+            pytest.param(
+                "from subprocess import check_output\n\nimport ops\n\n\ndef limit():\n"
+                '    return check_output(["/usr/sbin/sysctl", "fs.file-max"])\n',
+                id="read-only-sysctl",
+            ),
+        ],
+    )
+    def test_probing_command_no_diagnostic(self, tmp_charm: pathlib.Path, source: str):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            "import ops\n\n\nclass Charm(ops.CharmBase):\n    pass\n\n\nops.main(Charm)\n",
+        )
+        write_charm_source(tmp_charm, source, filename="workload.py")
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
+    def test_entrypoint_hook_tool_no_diagnostic(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            "import subprocess\n\nimport ops\n\n\nclass Charm(ops.CharmBase):\n"
+            "    def _on_start(self, event):\n"
+            '        subprocess.check_call(["open-port", "6000/TCP"])\n'
+            "\n\nops.main(Charm)\n",
+        )
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param(
+                "import subprocess\n\nimport ops\n\n\ndef forward():\n"
+                '    subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"])\n',
+                id="sysctl-write",
+            ),
+            pytest.param(
+                "import subprocess\n\nimport ops\n\n\ndef restart():\n"
+                '    cmd = ["systemctl", "restart", "app"]\n'
+                "    subprocess.run(cmd)\n",
+                id="command-in-variable",
+            ),
+        ],
+    )
+    def test_changing_command_in_variable_flagged(self, tmp_charm: pathlib.Path, source: str):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            "import ops\n\n\nclass Charm(ops.CharmBase):\n    pass\n\n\nops.main(Charm)\n",
+        )
+        write_charm_source(tmp_charm, source, filename="workload.py")
+        report = [d for d in lint(tmp_charm) if d.rule_id == "STRUCTURE-004"]
+        assert len(report) == 1
+        assert report[0].path == "src/workload.py"
+
+    def test_outside_src_no_diagnostic(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test-charm"})
+        write_charm_source(
+            tmp_charm,
+            "import ops\n\n\nclass Charm(ops.CharmBase):\n    pass\n\n\nops.main(Charm)\n",
+        )
+        vendored = tmp_charm / "lib" / "charms" / "other_charm" / "v0"
+        vendored.mkdir(parents=True)
+        (vendored / "thing.py").write_text(
+            "import subprocess\n\nimport ops\n\n"
+            'print(ops.ActiveStatus(), subprocess.run(["ls"]))\n'
+        )
+        unit = tmp_charm / "tests" / "unit"
+        unit.mkdir(parents=True)
+        (unit / "test_charm.py").write_text(
+            "import subprocess\n\nimport ops\n\n"
+            'print(ops.ActiveStatus(), subprocess.run(["ls"]))\n'
+        )
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
 
 class TestTestingRules:
     """Tests for TESTING-001 — no unit tests found."""
