@@ -66,6 +66,7 @@ config file overrides it per rule.
 | [METADATA-010](#metadata-010-circular-website-link) | `circular-website-link` | Info | 'website' link points to the charm's own Charmhub page |
 | [PEBBLE-005](#pebble-005-pebble-env-non-string) | `pebble-env-non-string` | Info | Pebble layer environment value is not a string |
 | [PEBBLE-006](#pebble-006-pebble-check-level-alive) | `pebble-check-level-alive` | Info | Pebble check uses level 'alive', which drives the Kubernetes liveness probe |
+| [PERFORMANCE-001](#performance-001-time-sleep-in-charm-source) | `time-sleep-in-charm-source` | Warning | time.sleep() in charm source blocks the hook |
 | [SECURITY-001](#security-001-secret-in-plain-config) | `secret-in-plain-config` | Error | Secret-like config option found — use Juju secrets instead |
 | [STATUS-001](#status-001-blocked-status-in-non-repeating-handler) | `blocked-status-in-non-repeating-handler` | Warning | BlockedStatus set in an install/start/stop/remove handler |
 | [STRUCTURE-001](#structure-001-no-licence) | `no-licence` | Info | No LICENSE/LICENCE file found |
@@ -875,6 +876,45 @@ workload whose author really does want Kubernetes to restart the
 container can suppress the rule on that line.
 
 Reference: <https://canonical.com/juju/docs/ops/latest/howto/manage-containers/manage-pebble-health-checks/>
+
+## PERFORMANCE
+
+Performance.
+
+### PERFORMANCE-001 time-sleep-in-charm-source
+
+**Warning** — time.sleep() in charm source blocks the hook
+
+Flag `time.sleep()` calls in the charm's own source.
+
+A hook that sleeps blocks for the whole duration: it burns the hook
+runner's wall-clock budget — exceeding it fails the hook — and delays
+every hook queued behind it. Sleeping is almost always polling for
+something that `event.defer()` (retrying on a later dispatch), a
+Pebble check, or a Pebble notice would handle properly.
+
+Every spelling that resolves to `time.sleep` is matched, including
+`import time as t` and `from time import sleep`. A `time.sleep`
+referenced as a value rather than called, and dynamic lookups such as
+`getattr(time, "sleep")(1)`, are not; neither are other sleep
+functions — `asyncio.sleep()`, `gevent.sleep()` — that do not
+block the hook runner. Name resolution is module-wide rather than
+scope-aware, so a local name shadowing an imported `sleep` — a
+parameter with a `sleep=sleep` default, say — is still read as
+`time.sleep`.
+
+Only code that runs inside the hook is flagged. Test suites are
+passed over wherever they sit in the charm tree: a `tests`
+directory under `src/` is test infrastructure like the top-level
+`tests/`. So is a standalone command-line program: a module whose
+own `__main__` entry point parses `sys.argv` runs as its own
+process — a continuous-writes worker, an observer daemon the charm
+spawns — or is run by hand, and its sleeps do not hold up the hook
+runner. A module that imports the Juju framework is treated as charm
+code even when it reads arguments, and a `__main__` guard alone
+does not make a library a program.
+
+Reference: <https://canonical.com/juju/docs/ops/latest/explanation/defer-guidance/>
 
 ## SECURITY
 
