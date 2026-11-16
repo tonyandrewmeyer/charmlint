@@ -66,6 +66,7 @@ config file overrides it per rule.
 | [METADATA-010](#metadata-010-circular-website-link) | `circular-website-link` | Info | 'website' link points to the charm's own Charmhub page |
 | [PEBBLE-005](#pebble-005-pebble-env-non-string) | `pebble-env-non-string` | Info | Pebble layer environment value is not a string |
 | [PEBBLE-006](#pebble-006-pebble-check-level-alive) | `pebble-check-level-alive` | Info | Pebble check uses level 'alive', which drives the Kubernetes liveness probe |
+| [PERFORMANCE-001](#performance-001-time-sleep) | `time-sleep` | Warning | time.sleep() in charm source delays the hook and the hooks queued behind it |
 | [SECURITY-001](#security-001-secret-in-plain-config) | `secret-in-plain-config` | Error | Secret-like config option found — use Juju secrets instead |
 | [STATUS-001](#status-001-blocked-status-in-non-repeating-handler) | `blocked-status-in-non-repeating-handler` | Warning | BlockedStatus set in an install/start/stop/remove handler |
 | [STRUCTURE-001](#structure-001-no-licence) | `no-licence` | Info | No LICENSE/LICENCE file found |
@@ -875,6 +876,28 @@ workload whose author really does want Kubernetes to restart the
 container can suppress the rule on that line.
 
 Reference: <https://canonical.com/juju/docs/ops/latest/howto/manage-containers/manage-pebble-health-checks/>
+
+## PERFORMANCE
+
+Performance.
+
+### PERFORMANCE-001 time-sleep
+
+**Warning** — time.sleep() in charm source delays the hook and the hooks queued behind it
+
+Flag `time.sleep(...)` in code that runs inside a Juju hook.
+
+A hook runs under a wall-clock timeout, so a sleep spends time the
+hook does not have and delays every hook queued behind it. Use
+`event.defer()`, a Pebble check, or a Pebble notice to wait for the
+condition instead.
+
+Every import spelling is resolved, including aliased imports. Not
+flagged: other sleep functions such as `asyncio.sleep()`; a
+`time.sleep` referenced as a value; test code; dead code; and code
+that only runs in the module's `if __name__ == "__main__":` block.
+
+Reference: <https://canonical.com/juju/docs/ops/latest/explanation/defer-guidance/>
 
 ## SECURITY
 
