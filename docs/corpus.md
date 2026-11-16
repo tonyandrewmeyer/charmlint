@@ -10,6 +10,7 @@ The default location for the cache is `~/.cache/hyrum/charms/<owner>/<repo>/…`
 
 A **charm** is the outermost directory holding a `charmcraft.yaml`, after dropping build and vendor noise, deduplicated by the `name` it declares. This gives a stable count.
 
+- **Not a bundle.** A `charmcraft.yaml` with `type: bundle`, or one beside a `bundle.yaml`, is a bundle. Drop it before picking the outermost directory, or a bundle at a repository root (`kfp-operators`, `istio-operators`, `argo-operators`, …) hides every charm below it.
 - **Outermost.** A charm's own build tree can contain other charms (`.tox/`, test fixtures, cookiecutter templates). Counting every `charmcraft.yaml` in the cache gives ~1970 rather than ~655.
 - **Excluding noise.** Skip any path containing `.tox`, `/tests/`, `/.template/`, `cookiecutter`, `/node_modules/`, `/.venv/`, `/build/`.
 - **Deduplicated by name.** `git.launchpad.net/charm-kubernetes-worker` and `charmed-kubernetes/charm-kubernetes-worker` are one charm.
@@ -29,6 +30,7 @@ def charm_dirs():
         p.parent
         for p in ROOT.rglob("charmcraft.yaml")
         if not any(n in "/" + str(p.parent.relative_to(ROOT)) for n in NOISE)
+        and not _is_bundle(p.parent)
     )
     outermost = [d for d in found if not any(o in d.parents for o in found)]
     seen: set[str] = set()
@@ -38,6 +40,16 @@ def charm_dirs():
             continue
         seen.add(name)
         yield d
+
+
+def _is_bundle(d: pathlib.Path) -> bool:
+    if (d / "bundle.yaml").is_file():
+        return True
+    try:
+        data = yaml.safe_load((d / "charmcraft.yaml").read_text()) or {}
+    except yaml.YAMLError:
+        return False
+    return isinstance(data, dict) and data.get("type") == "bundle"
 
 
 def _declared_name(d: pathlib.Path) -> str | None:
