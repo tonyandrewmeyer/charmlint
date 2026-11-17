@@ -386,6 +386,380 @@ class Charm(ops.CharmBase):
         (unit / "test_charm.py").write_text("def test_thing() -> None:\n    pass\n")
         assert "STRUCTURE-003" in {d.rule_id for d in lint(tmp_charm)}
 
+    @pytest.mark.parametrize(
+        ("call",),
+        [
+            pytest.param('subprocess.run(["systemctl", "restart", "demo"])', id="subprocess"),
+            pytest.param('os.system("systemctl restart demo")', id="os.system"),
+            pytest.param('os.popen("systemctl restart demo")', id="os.popen"),
+            pytest.param('os.execvp("demo", ["demo", "--restart"])', id="os.execvp"),
+            pytest.param('os.spawnve(os.P_WAIT, "demo", ["demo"], os.environ)', id="os.spawnve"),
+            pytest.param('os.posix_spawn("demo", ["demo", "--restart"], os.environ)', id="posix"),
+        ],
+    )
+    def test_helper_module_host_commands_flagged(self, tmp_charm: pathlib.Path, call: str):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            f"""\
+import subprocess
+import os
+
+import ops
+
+
+def restart() -> None:
+    {call}
+""",
+            filename="helper.py",
+        )
+        diagnostics = [d for d in lint(tmp_charm) if d.rule_id == "STRUCTURE-004"]
+        assert len(diagnostics) == 1
+        assert diagnostics[0].severity == Severity.INFO
+        assert diagnostics[0].path == "src/helper.py"
+
+    def test_workload_command_via_variable_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import subprocess
+
+import ops
+
+
+def restart() -> ops.BlockedStatus:
+    cmd = ["systemctl", "restart", "demo"]
+    subprocess.run(cmd)
+    return ops.BlockedStatus("restart failed")
+""",
+            filename="helper.py",
+        )
+        diagnostics = [d for d in lint(tmp_charm) if d.rule_id == "STRUCTURE-004"]
+        assert len(diagnostics) == 1
+        assert diagnostics[0].path == "src/helper.py"
+
+    def test_star_imported_ops_with_host_command_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import subprocess
+
+from ops import *
+
+
+def restart() -> None:
+    subprocess.run(["systemctl", "restart", "demo"])
+""",
+            filename="helper.py",
+        )
+        diagnostics = [d for d in lint(tmp_charm) if d.rule_id == "STRUCTURE-004"]
+        assert len(diagnostics) == 1
+        assert diagnostics[0].path == "src/helper.py"
+
+    def test_helper_module_container_exec_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import ops
+
+
+class Backup(ops.Object):
+    def run(self) -> None:
+        self.container.exec(["rm", "-r", "/tmp/backup"]).wait_output()
+""",
+            filename="helper.py",
+        )
+        diagnostics = [d for d in lint(tmp_charm) if d.rule_id == "STRUCTURE-004"]
+        assert len(diagnostics) == 1
+        assert diagnostics[0].path == "src/helper.py"
+
+    def test_helper_module_chained_container_exec_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import ops
+
+
+class Backup(ops.Object):
+    def run(self) -> None:
+        self.unit.get_container("backup").exec(["rm", "-r", "/tmp/backup"]).wait_output()
+""",
+            filename="helper.py",
+        )
+        diagnostics = [d for d in lint(tmp_charm) if d.rule_id == "STRUCTURE-004"]
+        assert len(diagnostics) == 1
+        assert diagnostics[0].path == "src/helper.py"
+
+    def test_entrypoint_host_commands_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import subprocess
+
+import ops
+
+
+class Charm(ops.CharmBase):
+    def _on_install(self, event: ops.InstallEvent) -> None:
+        subprocess.check_output(["lsb_release", "-r", "-s"])
+
+
+if __name__ == "__main__":
+    ops.main(Charm)
+""",
+        )
+        diagnostics = [d for d in lint(tmp_charm) if d.rule_id == "STRUCTURE-004"]
+        assert len(diagnostics) == 1
+        assert diagnostics[0].path == "src/charm.py"
+        assert "entrypoint" in diagnostics[0].message
+
+    def test_configured_entrypoint_and_sibling_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(
+            tmp_charm,
+            {"name": "test", "parts": {"charm": {"charm-entrypoint": "src/myapp.py"}}},
+        )
+        source = """\
+import subprocess
+
+import ops
+
+
+def restart() -> None:
+    subprocess.check_output(["systemctl", "restart", "demo"])
+"""
+        write_charm_source(tmp_charm, source, filename="myapp.py")
+        write_charm_source(tmp_charm, source, filename="helper.py")
+        diagnostics = [d for d in lint(tmp_charm) if d.rule_id == "STRUCTURE-004"]
+        assert len(diagnostics) == 2
+        assert {d.path for d in diagnostics} == {"src/myapp.py", "src/helper.py"}
+
+    def test_ops_main_module_host_commands_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import subprocess
+
+import ops
+
+
+class Charm(ops.CharmBase):
+    def _on_install(self, event: ops.InstallEvent) -> None:
+        subprocess.check_output(["lsb_release", "-r", "-s"])
+
+
+if __name__ == "__main__":
+    ops.main(Charm)
+""",
+            filename="k8s_charm.py",
+        )
+        diagnostics = [d for d in lint(tmp_charm) if d.rule_id == "STRUCTURE-004"]
+        assert len(diagnostics) == 1
+        assert diagnostics[0].path == "src/k8s_charm.py"
+        assert "entrypoint" in diagnostics[0].message
+
+    def test_ops_module_without_workload_not_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import ops
+
+
+def blocked(message: str) -> ops.BlockedStatus:
+    return ops.BlockedStatus(message)
+""",
+            filename="helper.py",
+        )
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
+    def test_os_environment_not_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import os
+
+import ops
+
+
+def path() -> str:
+    return os.environ.get("PATH", "")
+""",
+            filename="helper.py",
+        )
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
+    def test_subprocess_module_without_ops_not_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import subprocess
+
+
+def restart() -> None:
+    subprocess.run(["systemctl", "restart", "demo"])
+""",
+            filename="helper.py",
+        )
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
+    def test_exception_types_not_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import subprocess
+
+import ops
+
+
+def restart() -> ops.BlockedStatus:
+    try:
+        pass
+    except subprocess.CalledProcessError as error:
+        raise subprocess.CalledProcessError(error.returncode, error.cmd) from error
+""",
+            filename="helper.py",
+        )
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
+    def test_workload_exec_wrapper_not_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import ops
+
+
+class Backup(ops.Object):
+    def run(self) -> None:
+        self.workload.exec(["rm", "-r", "/tmp/backup"])
+""",
+            filename="helper.py",
+        )
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
+    def test_entrypoint_container_exec_not_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import ops
+
+
+class Charm(ops.CharmBase):
+    def _on_pebble_ready(self, event: ops.PebbleReadyEvent) -> None:
+        container = self.unit.get_container("demo")
+        container.exec(["demo", "--init"]).wait_output()
+""",
+        )
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
+    def test_ops_main_module_container_exec_not_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import ops
+
+
+class Charm(ops.CharmBase):
+    def _on_pebble_ready(self, event: ops.PebbleReadyEvent) -> None:
+        self.container.exec(["demo", "--init"]).wait_output()
+
+
+if __name__ == "__main__":
+    ops.main(Charm)
+""",
+            filename="k8s_charm.py",
+        )
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
+    def test_juju_hook_tools_not_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import json
+import subprocess
+
+import ops
+
+
+def relation_ids(reltype: str) -> list[str]:
+    cmd_line = ["relation-ids", "--format=json", reltype]
+    return json.loads(subprocess.check_output(cmd_line))
+
+
+def relation_list(relid: str) -> list[str]:
+    return subprocess.run(args=["relation-list", "--format=json", "-r", relid])
+
+
+def log(message: str) -> None:
+    subprocess.check_call(["juju-log", message])
+
+
+def ready() -> ops.ActiveStatus:
+    return ops.ActiveStatus()
+""",
+            filename="helper.py",
+        )
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
+    def test_command_via_helper_module_not_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test"})
+        write_charm_source(
+            tmp_charm,
+            """\
+import util
+
+import ops
+
+
+class Charm(ops.CharmBase):
+    def _on_install(self, event: ops.InstallEvent) -> None:
+        util.run(["systemctl", "restart", "demo"])
+""",
+        )
+        write_charm_source(
+            tmp_charm,
+            """\
+import subprocess
+
+
+def run(args: list[str]) -> None:
+    subprocess.run(args)
+""",
+            filename="util.py",
+        )
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
+    def test_libraries_and_tests_out_of_scope(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "test-charm"})
+        source = """\
+import subprocess
+
+import ops
+
+
+def restart() -> None:
+    subprocess.run(["systemctl", "restart", "demo"])
+"""
+        owned = tmp_charm / "lib" / "charms" / "test_charm" / "v0"
+        owned.mkdir(parents=True)
+        (owned / "thing.py").write_text(source)
+        unit = tmp_charm / "tests" / "unit"
+        unit.mkdir(parents=True)
+        (unit / "test_thing.py").write_text(source)
+        assert "STRUCTURE-004" not in {d.rule_id for d in lint(tmp_charm)}
+
 
 class TestTestingRules:
     """Tests for TESTING-001 — no unit tests found."""
