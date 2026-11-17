@@ -58,16 +58,43 @@ class _OpsDependency:
     #: ``tomllib`` discards positions, so a finding there anchors to
     #: the file.
     line: int | None
+    #: Whether it is a direct reference (``ops @ git+https://...``, or a
+    #: Poetry ``git``, ``url`` or ``path`` table) rather than a version
+    #: specifier. Neither pinning rule's advice applies to one: there is
+    #: no range to add, and no ``==`` to replace.
+    direct: bool = False
 
     @property
     def is_unpinned(self) -> bool:
         """Whether it carries no version constraint at all."""
+        if self.direct:
+            return False
         return not self.specifier or self.specifier == "*"
 
     @property
     def is_exact(self) -> bool:
-        """Whether it is pinned to a single version with ``==``."""
-        return self.specifier.startswith("==")
+        """Whether it is pinned to a single version with ``==`` or ``===``.
+
+        A wildcard such as ``==2.*`` is a prefix match, which is a
+        range, not a pin.
+        """
+        if self.direct:
+            return False
+        return any(
+            clause.strip().startswith("==") and not clause.strip().endswith(".*")
+            for clause in self.specifier.split(",")
+        )
+
+    @property
+    def is_runtime(self) -> bool:
+        """Whether it was declared where the charm's build installs from.
+
+        That is ``project.dependencies``, Poetry's main
+        ``dependencies`` table, or a requirements file the build plugin
+        reads (whose section is the file itself). Optional dependencies
+        and dependency groups are where test and lint tooling lives.
+        """
+        return self.section in _RUNTIME_SECTIONS or self.section == self.source
 
     @property
     def is_test_only(self) -> bool:
@@ -78,8 +105,12 @@ class _OpsDependency:
         rule has anything useful to say about it: a test harness wants
         the version the tests were written against, not a range chosen
         so security fixes flow into production.
+
+        The extra only means that outside the runtime sections, though.
+        ``ops[tracing,testing]`` in ``project.dependencies`` still
+        ships ``ops`` in the charm, so it is the runtime declaration.
         """
-        return "testing" in self.extras
+        return "testing" in self.extras and not self.is_runtime
 
     @property
     def where(self) -> str:
@@ -104,9 +135,23 @@ def _parse_pep508(
     match = _PEP508_RE.match(entry)
     if match is None or _dependencies.normalise(match.group("name")) != "ops":
         return None
+    rest = match.group("rest").strip()
+    if rest.startswith("@"):
+        # A direct reference; its URL can itself contain a `;`.
+        return _OpsDependency(
+            specifier=rest,
+            extras=_split_extras(match.group("extras")),
+            source=source,
+            section=section,
+            line=line,
+            direct=True,
+        )
     # Drop any environment marker: `ops>=2.23; python_version < "3.12"`
     # constrains when the dependency applies, not which versions satisfy it.
-    specifier = match.group("rest").split(";", 1)[0].strip()
+    specifier = rest.split(";", 1)[0].strip()
+    # PEP 508 still allows the old parenthesised form, `ops (==2.17.0)`.
+    if specifier.startswith("(") and specifier.endswith(")"):
+        specifier = specifier[1:-1].strip()
     return _OpsDependency(
         specifier=specifier,
         extras=_split_extras(match.group("extras")),
@@ -116,21 +161,34 @@ def _parse_pep508(
     )
 
 
+#: Keys of a Poetry dependency table that make it a direct reference
+#: rather than a version requirement.
+_POETRY_DIRECT_KEYS = frozenset({"git", "url", "path", "file"})
+
+
 def _parse_poetry(value: Any, source: str, section: str) -> _OpsDependency:
     """Parse a Poetry dependency value (bare string, or table with ``version``)."""
+    direct = False
     if isinstance(value, dict):
         specifier = str(value.get("version", ""))
         extras = value.get("extras")
         extras = tuple(str(e) for e in extras) if isinstance(extras, list) else ()
+        direct = not specifier and any(key in value for key in _POETRY_DIRECT_KEYS)
     else:
         specifier = str(value)
         extras = ()
+    specifier = specifier.strip()
+    # Poetry reads a bare version, `ops = "2.17.0"`, as an exact pin.
+    # Normalise it to the PEP 440 spelling so `is_exact` sees it.
+    if specifier[:1].isdigit():
+        specifier = f"=={specifier}"
     return _OpsDependency(
-        specifier=specifier.strip(),
+        specifier=specifier,
         extras=extras,
         source=source,
         section=section,
         line=None,
+        direct=direct,
     )
 
 
@@ -142,13 +200,25 @@ def _split_extras(extras: str | None) -> tuple[str, ...]:
     return tuple(part for part in stripped if part)
 
 
-def _find_ops_in_pyproject(data: dict[str, Any]) -> _OpsDependency | None:
+#: The ``pyproject.toml`` sections a charm's build installs from.
+_RUNTIME_SECTIONS = frozenset({"project.dependencies", "tool.poetry.dependencies"})
+
+
+def _find_ops_in_pyproject(
+    data: dict[str, Any], *, runtime: bool | None = None
+) -> _OpsDependency | None:
     """Look for an ``ops`` dependency across the common pyproject.toml layouts.
 
     *data* is the charm's parsed ``pyproject.toml``, read once by the
     linter core. ``None`` means no ``ops`` dependency appears in any
-    known location.
+    known location. *runtime* restricts the search to the runtime
+    sections (``True``) or to the rest (``False``); ``None`` searches
+    both, runtime sections first.
     """
+    if runtime is None:
+        return _find_ops_in_pyproject(data, runtime=True) or _find_ops_in_pyproject(
+            data, runtime=False
+        )
     source = "pyproject.toml"
     for declaration in _dependencies.pyproject_declarations(data):
         if declaration.name != "ops":
@@ -157,8 +227,9 @@ def _find_ops_in_pyproject(data: dict[str, Any]) -> _OpsDependency | None:
             dep = _parse_pep508(declaration.requirement, source, declaration.section)
         else:
             dep = _parse_poetry(declaration.poetry_value, source, declaration.section)
-        if dep is not None and not dep.is_test_only:
-            return dep
+        if dep is None or dep.is_runtime != runtime or dep.is_test_only:
+            continue
+        return dep
     return None
 
 
@@ -173,12 +244,44 @@ def _find_ops_in_requirements(
     files itself, and a finding should point at the file the charm
     actually declared rather than at one it does not have.
     """
+    return _scan_requirements(requirements, name, frozenset())
+
+
+#: A ``-r``/``--requirement`` include line in a requirements file.
+_INCLUDE_RE = re.compile(r"^(?:-r\s*|--requirement(?:\s*=\s*|\s+))(?P<path>\S+)")
+
+
+def _scan_requirements(
+    requirements: pathlib.Path, name: str, seen: frozenset[pathlib.Path]
+) -> _OpsDependency | None:
+    """Scan one requirements file, following ``-r`` includes in place.
+
+    pip reads an included file at the point of the ``-r`` line, so a
+    charm that keeps its runtime pins in a shared file and pulls it in
+    with ``-r`` still declares ``ops`` there. *seen* stops an include
+    cycle from recursing forever.
+    """
     try:
+        resolved = requirements.resolve()
         text = requirements.read_text()
     except OSError:
         return None
-    for lineno, requirement in _dependencies.requirement_lines(text):
-        dep = _parse_pep508(requirement, name, name, lineno)
+    seen = seen | {resolved}
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.split("#", 1)[0].strip()
+        include = _INCLUDE_RE.match(line)
+        if include is not None:
+            target = requirements.parent / include.group("path")
+            if target.resolve() in seen:
+                continue
+            target_name = str(pathlib.PurePosixPath(name).parent / include.group("path"))
+            dep = _scan_requirements(target, target_name, seen)
+            if dep is not None:
+                return dep
+            continue
+        if not line or line.startswith("-"):
+            continue
+        dep = _parse_pep508(line, name, name, lineno)
         if dep is not None and not dep.is_test_only:
             return dep
     return None
@@ -240,17 +343,40 @@ def _requirements_files(context: models.CharmContext) -> tuple[tuple[pathlib.Pat
     plugin = part.get("plugin").value
     if plugin in _LOCKFILE_PLUGINS:
         return ()
-    if plugin == "python":
-        # The python plugin names its own requirements files, and a
-        # charm using it need not call them requirements.txt.
+    # The python plugin names its own requirements files, as does the
+    # charm plugin, and a charm using either need not call them
+    # requirements.txt.
+    key = {"python": "python-requirements", "charm": "charm-requirements"}.get(plugin)
+    if key is not None:
         declared = tuple(
             (context.charm_dir / str(entry.value), str(entry.value))
-            for entry in part.get("python-requirements").elements or ()
+            for entry in part.get(key).elements or ()
             if entry.value
         )
         if declared:
             return declared
     return default
+
+
+#: The charm plugin's keys for packages it installs by name, listed in
+#: ``charmcraft.yaml`` itself rather than in a requirements file. The
+#: plugin installs these before the requirements files.
+_CHARM_PLUGIN_PACKAGE_KEYS = ("charm-binary-python-packages", "charm-python-packages")
+
+
+def _find_ops_in_charm_plugin_packages(context: models.CharmContext) -> _OpsDependency | None:
+    """Look for ``ops`` among the packages the charm plugin installs by name."""
+    part = _dependency_part(context.metadata)
+    if part is None or part.get("plugin").value != "charm":
+        return None
+    for key in _CHARM_PLUGIN_PACKAGE_KEYS:
+        for entry in part.get(key).elements or ():
+            if not isinstance(entry.value, str):
+                continue
+            dep = _parse_pep508(entry.value, entry.source, entry.source, entry.line)
+            if dep is not None and not dep.is_test_only:
+                return dep
+    return None
 
 
 @functools.cache
@@ -276,17 +402,33 @@ def _find_ops_dep(context: models.CharmContext) -> _OpsDependency | None:
     declare it at all do so twice or more, almost always runtime
     ``ops`` alongside ``ops[testing]`` in a test group — so
     :attr:`_OpsDependency.is_test_only` declarations are stepped over
-    rather than returned. ``pyproject.toml`` wins over the requirements
-    files when both are present, and which requirements files those are
-    is decided by the charm's build plugin — see
-    :func:`_requirements_files`.
+    rather than returned.
+
+    The search runs from the places the built charm installs ``ops``
+    from to the places it does not: the runtime sections of
+    ``pyproject.toml``, then the charm plugin's named packages, then
+    the requirements files the charm's build plugin reads (see
+    :func:`_requirements_files`), and only then the optional
+    dependencies and groups of ``pyproject.toml``. A ``==`` pin in a
+    ``unit`` group therefore no longer hides the range in
+    ``requirements.txt`` that actually ships.
     """
     if context.pyproject is not None:
-        dep = _find_ops_in_pyproject(context.pyproject)
+        dep = _find_ops_in_pyproject(context.pyproject, runtime=True)
         if dep is not None:
             return dep
 
-    return _find_ops_requirements(_requirements_files(context))
+    dep = _find_ops_in_charm_plugin_packages(context)
+    if dep is not None:
+        return dep
+
+    dep = _find_ops_requirements(_requirements_files(context))
+    if dep is not None:
+        return dep
+
+    if context.pyproject is not None:
+        return _find_ops_in_pyproject(context.pyproject, runtime=False)
+    return None
 
 
 class OciImageMissingUpstreamSource(Rule):

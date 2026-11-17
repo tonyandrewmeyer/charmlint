@@ -493,6 +493,58 @@ class TestOpsPinningRules:
         assert len(pinned) == 1
         assert pinned[0].path == "deps/runtime.txt"
 
+    def test_charm_plugin_reads_charm_requirements(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(
+            tmp_charm,
+            {
+                "name": "x",
+                "parts": {
+                    "charm": {"plugin": "charm", "charm-requirements": ["requirements-charm.txt"]}
+                },
+            },
+        )
+        (tmp_charm / "requirements-charm.txt").write_text("ops==3.7.1\n")
+        (tmp_charm / "requirements.txt").write_text("ops>=2.23,<4\n")
+        report = lint(tmp_charm)
+        pinned = [d for d in report if d.rule_id == "SUPPLYCHAIN-006"]
+        assert len(pinned) == 1
+        assert pinned[0].path == "requirements-charm.txt"
+
+    @pytest.mark.parametrize("key", ["charm-binary-python-packages", "charm-python-packages"])
+    def test_charm_plugin_named_packages(self, tmp_charm: pathlib.Path, key: str):
+        write_charmcraft_yaml(
+            tmp_charm,
+            {"name": "x", "parts": {"charm": {"plugin": "charm", key: ["ops==3.5.0"]}}},
+        )
+        report = lint(tmp_charm)
+        pinned = [d for d in report if d.rule_id == "SUPPLYCHAIN-006"]
+        assert len(pinned) == 1
+        assert pinned[0].path == "charmcraft.yaml"
+        assert pinned[0].line is not None
+
+    def test_named_packages_ignored_for_other_plugins(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(
+            tmp_charm,
+            {
+                "name": "x",
+                "parts": {"charm": {"plugin": "uv", "charm-binary-python-packages": ["ops"]}},
+            },
+        )
+        report = lint(tmp_charm)
+        assert not [d for d in report if d.rule_id in {"SUPPLYCHAIN-005", "SUPPLYCHAIN-006"}]
+
+    def test_test_group_pin_does_not_hide_requirements(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "x"})
+        (tmp_charm / "pyproject.toml").write_text(
+            '[project]\nname = "x"\n\n[dependency-groups]\nunit = ["ops==2.17.0"]\n'
+        )
+        (tmp_charm / "requirements.txt").write_text("ops\n")
+        report = lint(tmp_charm)
+        unpinned = [d for d in report if d.rule_id == "SUPPLYCHAIN-005"]
+        assert len(unpinned) == 1
+        assert unpinned[0].path == "requirements.txt"
+        assert not [d for d in report if d.rule_id == "SUPPLYCHAIN-006"]
+
     def test_python_plugin_without_declaration_falls_back(self, tmp_charm: pathlib.Path):
         write_charmcraft_yaml(
             tmp_charm, {"name": "x", "parts": {"my-charm": {"plugin": "python"}}}
@@ -594,11 +646,10 @@ class TestOpsDependencyParsing:
         })
         assert dep is None
 
-    def test_testing_extra_skipped_for_poetry(self):
+    def test_testing_extra_skipped_for_poetry_group(self):
         dep = _supplychain._find_ops_in_pyproject({
             "tool": {
                 "poetry": {
-                    "dependencies": {"ops": {"version": "*", "extras": ["testing"]}},
                     "group": {
                         "unit": {"dependencies": {"ops": {"version": "*", "extras": ["testing"]}}}
                     },
@@ -607,10 +658,128 @@ class TestOpsDependencyParsing:
         })
         assert dep is None
 
-    def test_testing_extra_skipped_in_requirements(self, tmp_charm: pathlib.Path):
+    def test_testing_extra_kept_in_poetry_main_dependencies(self):
+        """Poetry's main table is what ships, whatever extras it asks for."""
+        dep = _supplychain._find_ops_in_pyproject({
+            "tool": {"poetry": {"dependencies": {"ops": {"version": "*", "extras": ["testing"]}}}}
+        })
+        assert dep is not None
+        assert dep.section == "tool.poetry.dependencies"
+
+    def test_testing_extra_kept_in_project_dependencies(self):
+        dep = _supplychain._find_ops_in_pyproject({
+            "project": {"dependencies": ["ops[tracing,testing]==2.17.0"]}
+        })
+        assert dep is not None
+        assert dep.is_exact
+
+    def test_testing_extra_kept_in_requirements(self, tmp_charm: pathlib.Path):
+        """A requirements file the build reads ships `ops`, whatever extras it asks for."""
         path = tmp_charm / "requirements.txt"
         path.write_text("ops[testing]\n")
-        assert _supplychain._find_ops_in_requirements(path) is None
+        dep = _supplychain._find_ops_in_requirements(path)
+        assert dep is not None
+        assert dep.is_unpinned
+
+    def test_runtime_section_wins_over_an_earlier_group(self):
+        dep = _supplychain._find_ops_in_pyproject({
+            "tool": {"poetry": {"dependencies": {"ops": "^2.17"}}},
+            "dependency-groups": {"unit": ["ops==2.17.0"]},
+        })
+        assert dep is not None
+        assert dep.section == "tool.poetry.dependencies"
+
+    @pytest.mark.parametrize(
+        ("entry", "exact"),
+        [
+            ("ops==2.17.0", True),
+            ("ops===2.17.0", True),
+            ("ops>=2,==2.17.0", True),
+            ("ops==2.*", False),
+            ("ops==2.17.*", False),
+            ("ops (==2.17.0)", True),
+            ("ops (>=2.17,<3)", False),
+        ],
+    )
+    def test_pep508_exactness(self, entry: str, exact: bool):
+        dep = _supplychain._parse_pep508(entry, "requirements.txt", "requirements.txt")
+        assert dep is not None
+        assert dep.is_exact is exact
+        assert not dep.is_unpinned
+
+    def test_pep508_parenthesised_specifier_unwrapped(self):
+        dep = _supplychain._parse_pep508("ops (==2.17.0)", "requirements.txt", "requirements.txt")
+        assert dep is not None
+        assert dep.specifier == "==2.17.0"
+
+    @pytest.mark.parametrize(
+        ("value", "exact"),
+        [("2.17.0", True), ("2.*", False), ("^2.17", False), ("~2.17", False)],
+    )
+    def test_poetry_bare_version(self, value: str, exact: bool):
+        dep = _supplychain._parse_poetry(value, "pyproject.toml", "tool.poetry.dependencies")
+        assert dep.is_exact is exact
+        assert not dep.is_unpinned
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"git": "https://github.com/canonical/operator", "rev": "abc123"},
+            {"git": "https://github.com/canonical/operator", "branch": "main"},
+            {"path": "../operator", "develop": True},
+            {"url": "https://example.com/ops-2.17.0.tar.gz"},
+        ],
+    )
+    def test_poetry_direct_reference_is_neither_rule(self, value: dict[str, object]):
+        dep = _supplychain._parse_poetry(value, "pyproject.toml", "tool.poetry.dependencies")
+        assert dep.direct
+        assert not dep.is_unpinned
+        assert not dep.is_exact
+
+    def test_pep508_direct_reference_is_neither_rule(self):
+        dep = _supplychain._parse_pep508(
+            "ops @ git+https://github.com/canonical/operator@abc123",
+            "requirements.txt",
+            "requirements.txt",
+        )
+        assert dep is not None
+        assert dep.direct
+        assert not dep.is_unpinned
+        assert not dep.is_exact
+
+    def test_requirements_include_followed(self, tmp_charm: pathlib.Path):
+        (tmp_charm / "deps").mkdir()
+        (tmp_charm / "deps" / "runtime.txt").write_text("requests\nops==2.17.0\n")
+        path = tmp_charm / "requirements.txt"
+        path.write_text("-r deps/runtime.txt\n")
+        dep = _supplychain._find_ops_in_requirements(path)
+        assert dep is not None
+        assert dep.source == "deps/runtime.txt"
+        assert dep.line == 2
+        assert dep.is_exact
+
+    @pytest.mark.parametrize(
+        "line", ["--requirement deps.txt", "--requirement=deps.txt", "-rdeps.txt"]
+    )
+    def test_requirements_include_spellings(self, tmp_charm: pathlib.Path, line: str):
+        (tmp_charm / "deps.txt").write_text("ops\n")
+        path = tmp_charm / "requirements.txt"
+        path.write_text(f"{line}\n")
+        dep = _supplychain._find_ops_in_requirements(path)
+        assert dep is not None
+        assert dep.source == "deps.txt"
+
+    def test_requirements_include_cycle_terminates(self, tmp_charm: pathlib.Path):
+        (tmp_charm / "a.txt").write_text("-r b.txt\n")
+        (tmp_charm / "b.txt").write_text("-r a.txt\n")
+        assert _supplychain._find_ops_in_requirements(tmp_charm / "a.txt", "a.txt") is None
+
+    def test_requirements_include_missing_file(self, tmp_charm: pathlib.Path):
+        path = tmp_charm / "requirements.txt"
+        path.write_text("-r missing.txt\nops>=2,<3\n")
+        dep = _supplychain._find_ops_in_requirements(path)
+        assert dep is not None
+        assert dep.line == 2
 
     def test_requirements_line_recorded(self, tmp_charm: pathlib.Path):
         path = tmp_charm / "requirements.txt"
