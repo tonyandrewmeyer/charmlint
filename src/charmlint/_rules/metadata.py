@@ -9,6 +9,7 @@ paper over a real misplacement.
 
 import urllib.parse
 
+from .. import _discovery
 from .. import _models as models
 from ._base import Rule
 
@@ -43,12 +44,10 @@ def _is_charmcraft(context: models.CharmContext) -> bool:
 
 
 def _is_bundle(context: models.CharmContext) -> bool:
-    # Bundles declare `type: bundle` in charmcraft.yaml, or use the legacy
-    # top-level bundle.yaml layout. Neither shape needs the charm-metadata
-    # fields these rules check for.
-    if context.metadata.get("type").value == "bundle":
-        return True
-    return (context.charm_dir / "bundle.yaml").is_file()
+    # A bundle doesn't need the charm-metadata fields these rules check for.
+    # Discovery doesn't hand bundles to the rules, but a rule can still be run
+    # on a context built by hand.
+    return _discovery.is_bundle_dir(context.charm_dir)
 
 
 class MissingName(Rule):

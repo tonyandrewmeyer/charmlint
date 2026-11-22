@@ -175,22 +175,29 @@ class TestMetadataRules:
         ):
             assert rid not in ids, f"{rid} should not fire for modern charmcraft.yaml"
 
-    def test_bundle_skips_metadata_rules(self, tmp_charm: pathlib.Path):
+    def test_bundle_is_not_linted(self, tmp_charm: pathlib.Path):
         write_charmcraft_yaml(tmp_charm, {"type": "bundle", "name": "my-bundle"})
-        report = lint(tmp_charm)
-        meta_ids = {d.rule_id for d in list(report) if d.rule_id.startswith("METADATA")}
-        assert not meta_ids
+        report = list(lint(tmp_charm))
+        assert [d.rule_id for d in report] == ["FATAL"]
+        assert "bundle" in report[0].message
 
-    def test_legacy_bundle_yaml_skips_metadata_rules(self, tmp_charm: pathlib.Path):
+    def test_legacy_bundle_yaml_is_not_linted(self, tmp_path: pathlib.Path):
         # A charmcraft.yaml that doesn't say ``type: bundle``: the bundle.yaml
         # beside it is what marks the directory as a bundle.
-        write_charmcraft_yaml(tmp_charm, {"description": "A bundle."})
-        without = {d.rule_id for d in lint(tmp_charm)}
+        write_charmcraft_yaml(tmp_path, {"description": "A bundle."})
+        without = {d.rule_id for d in lint(tmp_path)}
         assert "METADATA-001" in without
+        (tmp_path / "bundle.yaml").write_text("applications: {}\n")
+        report = list(lint(tmp_path))
+        assert [d.rule_id for d in report] == ["FATAL"]
+        assert "bundle" in report[0].message
+
+    def test_charm_with_a_test_bundle_yaml_is_linted(self, tmp_charm: pathlib.Path):
+        # landscape-client-charm keeps a bundle.yaml at its root to deploy
+        # itself in tests; its src/ makes it a charm.
+        write_charmcraft_yaml(tmp_charm, {"description": "A charm."})
         (tmp_charm / "bundle.yaml").write_text("applications: {}\n")
-        report = list(lint(tmp_charm))
-        assert "FATAL" not in {d.rule_id for d in report}
-        assert not {d.rule_id for d in report if d.rule_id.startswith("METADATA")}
+        assert "METADATA-001" in {d.rule_id for d in lint(tmp_charm)}
 
 
 class TestDocumentationRules:

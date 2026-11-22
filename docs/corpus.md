@@ -10,8 +10,8 @@ The default location for the cache is `~/.cache/hyrum/charms/<owner>/<repo>/…`
 
 A **charm** is the outermost directory holding a `charmcraft.yaml`, after dropping build and vendor noise, deduplicated by the `name` it declares. This gives a stable count.
 
-- **Not a bundle.** A `charmcraft.yaml` with `type: bundle`, or one beside a `bundle.yaml`, is a bundle. Drop it before picking the outermost directory, or a bundle at a repository root (`kfp-operators`, `istio-operators`, `argo-operators`, …) hides every charm below it.
-- **Outermost.** A charm's own build tree can contain other charms (`.tox/`, test fixtures, cookiecutter templates). Counting every `charmcraft.yaml` in the cache gives ~1970 rather than ~655.
+- **Not a bundle.** A `charmcraft.yaml` with `type: bundle` is a bundle, and so is a `bundle.yaml` beside metadata that doesn't say `type: charm` and has no `src/` or `hooks/` (some charms keep a `bundle.yaml` at their root for their own tests). Drop it before picking the outermost directory, or a bundle at a repository root (`kfp-operators`, `istio-operators`, `argo-operators`, …) hides every charm below it.
+- **Outermost.** A charm's own build tree can contain other charms (`.tox/`, test fixtures, cookiecutter templates). Counting every `charmcraft.yaml` in the cache gives ~1970 rather than ~665.
 - **Excluding noise.** Skip any path containing `.tox`, `/tests/`, `/.template/`, `cookiecutter`, `/node_modules/`, `/.venv/`, `/build/`.
 - **Deduplicated by name.** `git.launchpad.net/charm-kubernetes-worker` and `charmed-kubernetes/charm-kubernetes-worker` are one charm.
 
@@ -43,13 +43,15 @@ def charm_dirs():
 
 
 def _is_bundle(d: pathlib.Path) -> bool:
-    if (d / "bundle.yaml").is_file():
-        return True
     try:
         data = yaml.safe_load((d / "charmcraft.yaml").read_text()) or {}
-    except yaml.YAMLError:
-        return False
-    return isinstance(data, dict) and data.get("type") == "bundle"
+    except (OSError, yaml.YAMLError):
+        data = {}
+    charm_type = data.get("type") if isinstance(data, dict) else None
+    if charm_type in ("bundle", "charm"):
+        return charm_type == "bundle"
+    has_code = (d / "src").is_dir() or (d / "hooks").is_dir()
+    return (d / "bundle.yaml").is_file() and not has_code
 
 
 def _declared_name(d: pathlib.Path) -> str | None:

@@ -301,16 +301,22 @@ def lint(
     charm_dirs = _discovery.discover_charms(path)
 
     if not charm_dirs:
+        if _discovery.is_bundle_dir(path):
+            message = (
+                "This is a bundle, and there is no charm below it — charmlint only lints charms."
+            )
+        else:
+            message = (
+                "No charmcraft.yaml or metadata.yaml found here or in any "
+                "directory below — is this a charm directory?"
+            )
         return models.LintReport.from_diagnostics(
             charm_dir=path,
             diagnostics=[
                 models.Diagnostic(
                     rule_id="FATAL",
                     severity=models.Severity.ERROR,
-                    message=(
-                        "No charmcraft.yaml or metadata.yaml found here or in any "
-                        "directory below — is this a charm directory?"
-                    ),
+                    message=message,
                 )
             ],
         )

@@ -45,6 +45,17 @@ class TestIsBundleDir:
     def test_charm(self, tmp_path: pathlib.Path):
         assert not is_bundle_dir(_charm(tmp_path / "c", "c"))
 
+    def test_bundle_yaml_beside_charm_code_is_a_charm(self, tmp_path: pathlib.Path):
+        (tmp_path / "metadata.yaml").write_text("name: mssql\n")
+        (tmp_path / "bundle.yaml").write_text("applications: {}\n")
+        (tmp_path / "hooks").mkdir()
+        assert not is_bundle_dir(tmp_path)
+
+    def test_bundle_yaml_beside_type_charm_is_a_charm(self, tmp_path: pathlib.Path):
+        write_charmcraft_yaml(tmp_path, {"name": "c", "type": "charm"})
+        (tmp_path / "bundle.yaml").write_text("applications: {}\n")
+        assert not is_bundle_dir(tmp_path)
+
     def test_broken_charmcraft_yaml_is_not_a_bundle(self, tmp_path: pathlib.Path):
         (tmp_path / "charmcraft.yaml").write_text("type: [bundle\n")
         assert not is_bundle_dir(tmp_path)
@@ -123,11 +134,9 @@ class TestDiscoverCharms:
         _bundle(tmp_path / "releases" / "2.15" / "mlflow", "mlflow")
         assert discover_charms(tmp_path) == [charm]
 
-    def test_bundle_alone_is_returned(self, tmp_path: pathlib.Path):
-        # Linting a bundle directly still lints the bundle, so the
-        # bundle-aware rules get to skip it.
+    def test_bundle_alone_is_not_returned(self, tmp_path: pathlib.Path):
         _bundle(tmp_path, "solo-bundle")
-        assert discover_charms(tmp_path) == [tmp_path]
+        assert discover_charms(tmp_path) == []
 
     def test_nested_bundle_alone_is_not_returned(self, tmp_path: pathlib.Path):
         _bundle(tmp_path / "bundles" / "b", "b")

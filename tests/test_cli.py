@@ -45,10 +45,10 @@ class TestCLI:
         assert data["total"] > 0
 
     def test_select_filter(self, tmp_charm: pathlib.Path):
-        write_charmcraft_yaml(tmp_charm, {"type": "bundle", "name": "test"})
-        exit_code = main([str(tmp_charm), "--select", "METADATA"])
-        # Bundles skip every METADATA rule, so with only METADATA selected,
-        # no diagnostics → exit 0.
+        write_charmcraft_yaml(tmp_charm, {"display-name": "X"})
+        # Missing ``name`` is a METADATA error; with only SECURITY selected,
+        # nothing fires → exit 0.
+        exit_code = main([str(tmp_charm), "--select", "SECURITY"])
         assert exit_code == 0
 
     def test_ignore_filter(self, tmp_charm: pathlib.Path, capsys: pytest.CaptureFixture[str]):

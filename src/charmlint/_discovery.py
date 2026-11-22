@@ -23,9 +23,9 @@ no charm of the user's: virtualenvs, build output, and test data.
 A bundle is the exception. ``kfp-operators`` and several other Kubeflow
 repositories keep a ``charmcraft.yaml`` with ``type: bundle`` at the root and
 their charms under ``charms/``, so a bundle is not a charm and the walk
-carries on below it. The one bundle that is still returned is the path the
-user gave, when there is no charm under it: linting a bundle directly is
-how the bundle-aware rules (the METADATA family skips bundles) get used.
+carries on below it. A bundle is never returned, even when it is the path
+the user gave: charmlint has no rules for bundles, so a bundle with no
+charm below it is reported as having nothing to lint.
 """
 
 import pathlib
@@ -63,39 +63,42 @@ def is_bundle_dir(directory: pathlib.Path) -> bool:
     """Return whether *directory* holds a bundle rather than a charm.
 
     A bundle declares ``type: bundle`` in ``charmcraft.yaml``, or uses the
-    legacy layout with a ``bundle.yaml`` beside its metadata — the same two
-    shapes the METADATA rules treat as a bundle.
+    legacy layout with a ``bundle.yaml`` beside its metadata. A
+    ``bundle.yaml`` alone is not enough, though: some charms keep one at
+    their root to deploy themselves in tests (``landscape-client-charm``,
+    ``charm-mssql``), so a ``charmcraft.yaml`` saying ``type: charm``, or a
+    ``src/`` or ``hooks/`` directory, makes it a charm.
     """
-    if (directory / "bundle.yaml").is_file():
-        return True
     try:
-        charmcraft = _yaml.load(directory / "charmcraft.yaml")
+        charm_type = _yaml.load(directory / "charmcraft.yaml").get("type").value
     except _yaml.FileLoadError:
         # A broken charmcraft.yaml is the charm's problem to report, not a
         # reason to skip it.
+        charm_type = None
+    if charm_type == "bundle":
+        return True
+    if charm_type == "charm":
         return False
-    return charmcraft.get("type").value == "bundle"
+    if not (directory / "bundle.yaml").is_file():
+        return False
+    return not any((directory / name).is_dir() for name in ("src", "hooks"))
 
 
 def discover_charms(root: pathlib.Path) -> list[pathlib.Path]:
     """Return the charm directories at or below *root*, outermost first.
 
     ``[root]`` when *root* is itself a charm — the overwhelmingly common
-    case, and the one that leaves single-charm behaviour untouched — or a
-    bundle with no charm below it. Bundles anywhere else are walked through
-    rather than returned. An empty
-    list when there is no charm to be found, which the caller reports rather
-    than treating as a clean run.
+    case, and the one that leaves single-charm behaviour untouched. Bundles
+    are walked through rather than returned. An empty list when there is no
+    charm to be found, which the caller reports rather than treating as a
+    clean run.
     """
     found: list[pathlib.Path] = []
-    bundles: list[pathlib.Path] = []
 
     def walk(directory: pathlib.Path, depth: int) -> None:
-        if is_charm_dir(directory):
-            if not is_bundle_dir(directory):
-                found.append(directory)
-                return
-            bundles.append(directory)
+        if is_charm_dir(directory) and not is_bundle_dir(directory):
+            found.append(directory)
+            return
         if depth >= _MAX_DEPTH:
             return
         try:
@@ -112,6 +115,4 @@ def discover_charms(root: pathlib.Path) -> list[pathlib.Path]:
             walk(child, depth + 1)
 
     walk(root, 0)
-    if not found and bundles and bundles[0] == root:
-        return [root]
     return found
