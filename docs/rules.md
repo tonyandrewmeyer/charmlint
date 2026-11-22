@@ -886,6 +886,19 @@ Security.
 
 Detect config options that look like secrets but aren't using Juju secrets.
 
+A string option is flagged when the last hyphen- or
+underscore-separated part of its name is `password`, `passwd`,
+`passphrase`, `secret`, `token` or `credential(s)`, or a
+qualified key: `api-key`, `private-key`, `ssh-key`,
+`ssl-key`, `tls-key`, `secret-key` or `access-key` (with a
+hyphen, an underscore or nothing between the two words). A bare
+`key` is not flagged.
+
+An option whose name ends in `secret` is left alone when its
+description says it holds a Juju secret ID or URI, since that is
+already the recommended pattern, and so is an `*-pull-secret`
+option, which names a Kubernetes Secret.
+
 Reference: <https://canonical.com/juju/docs/ops/latest/howto/manage-secrets/>
 
 ## STATUS
