@@ -725,7 +725,7 @@ class TestOpsDependencyParsing:
         "value",
         [
             {"git": "https://github.com/canonical/operator", "rev": "abc123"},
-            {"git": "https://github.com/canonical/operator", "branch": "main"},
+            {"git": "https://github.com/canonical/operator", "tag": "2.17.0"},
             {"path": "../operator", "develop": True},
             {"url": "https://example.com/ops-2.17.0.tar.gz"},
         ],
@@ -735,6 +735,52 @@ class TestOpsDependencyParsing:
         assert dep.direct
         assert not dep.is_unpinned
         assert not dep.is_exact
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"git": "https://github.com/canonical/operator"},
+            {"git": "https://github.com/canonical/operator", "branch": "main"},
+        ],
+    )
+    def test_poetry_git_without_rev_is_unpinned(self, value: dict[str, object]):
+        dep = _supplychain._parse_poetry(value, "pyproject.toml", "tool.poetry.dependencies")
+        assert dep.direct
+        assert dep.is_unpinned
+        assert not dep.is_exact
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "ops @ git+https://github.com/canonical/operator",
+            "ops @ git+https://github.com/canonical/operator#egg=ops",
+            "ops @ git+ssh://git@github.com/canonical/operator.git",
+        ],
+    )
+    def test_pep508_git_without_ref_is_unpinned(self, entry: str):
+        dep = _supplychain._parse_pep508(entry, "requirements.txt", "requirements.txt")
+        assert dep is not None
+        assert dep.is_unpinned
+        assert not dep.is_exact
+
+    def test_pep508_ssh_git_with_ref_is_neither_rule(self):
+        dep = _supplychain._parse_pep508(
+            "ops @ git+ssh://git@github.com/canonical/operator.git@abc123",
+            "requirements.txt",
+            "requirements.txt",
+        )
+        assert dep is not None
+        assert not dep.is_unpinned
+        assert not dep.is_exact
+
+    def test_git_without_rev_message(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "x"})
+        (tmp_charm / "requirements.txt").write_text(
+            "ops @ git+https://github.com/canonical/operator\n"
+        )
+        hits = [d for d in lint(tmp_charm) if d.rule_id == "SUPPLYCHAIN-005"]
+        assert len(hits) == 1
+        assert "git reference with no revision" in hits[0].message
 
     def test_pep508_direct_reference_is_neither_rule(self):
         dep = _supplychain._parse_pep508(

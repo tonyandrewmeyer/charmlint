@@ -60,15 +60,20 @@ class _OpsDependency:
     line: int | None
     #: Whether it is a direct reference (``ops @ git+https://...``, or a
     #: Poetry ``git``, ``url`` or ``path`` table) rather than a version
-    #: specifier. Neither pinning rule's advice applies to one: there is
-    #: no range to add, and no ``==`` to replace.
+    #: specifier. There is no ``==`` to replace in one, so it is never
+    #: exactly pinned.
     direct: bool = False
+    #: Whether it is a git reference with no revision to hold it in place:
+    #: no ``@<ref>`` on the URL, or a Poetry ``git`` table with no ``rev``
+    #: or ``tag`` (a ``branch`` moves). It installs whatever the branch
+    #: holds on the day, which is as unpinned as a dependency gets.
+    floating_git: bool = False
 
     @property
     def is_unpinned(self) -> bool:
         """Whether it carries no version constraint at all."""
         if self.direct:
-            return False
+            return self.floating_git
         return not self.specifier or self.specifier == "*"
 
     @property
@@ -145,6 +150,7 @@ def _parse_pep508(
             section=section,
             line=line,
             direct=True,
+            floating_git=_is_floating_git_url(rest[1:].strip()),
         )
     # Drop any environment marker: `ops>=2.23; python_version < "3.12"`
     # constrains when the dependency applies, not which versions satisfy it.
@@ -161,6 +167,22 @@ def _parse_pep508(
     )
 
 
+def _is_floating_git_url(url: str) -> bool:
+    """Whether a PEP 508 direct-reference URL is git with no ``@<ref>``.
+
+    ``git+https://github.com/canonical/operator@2.17.0`` names a ref;
+    ``git+https://github.com/canonical/operator`` follows the default
+    branch. The ``user@`` of an SSH URL sits before the path, so only
+    an ``@`` in the path counts.
+    """
+    if not url.startswith("git+"):
+        return False
+    url = url.split("#", 1)[0]
+    _, _, rest = url.partition("://")
+    _, _, path = rest.partition("/")
+    return "@" not in path
+
+
 #: Keys of a Poetry dependency table that make it a direct reference
 #: rather than a version requirement.
 _POETRY_DIRECT_KEYS = frozenset({"git", "url", "path", "file"})
@@ -168,12 +190,13 @@ _POETRY_DIRECT_KEYS = frozenset({"git", "url", "path", "file"})
 
 def _parse_poetry(value: Any, source: str, section: str) -> _OpsDependency:
     """Parse a Poetry dependency value (bare string, or table with ``version``)."""
-    direct = False
+    direct = floating_git = False
     if isinstance(value, dict):
         specifier = str(value.get("version", ""))
         extras = value.get("extras")
         extras = tuple(str(e) for e in extras) if isinstance(extras, list) else ()
         direct = not specifier and any(key in value for key in _POETRY_DIRECT_KEYS)
+        floating_git = direct and "git" in value and not ("rev" in value or "tag" in value)
     else:
         specifier = str(value)
         extras = ()
@@ -189,6 +212,7 @@ def _parse_poetry(value: Any, source: str, section: str) -> _OpsDependency:
         section=section,
         line=None,
         direct=direct,
+        floating_git=floating_git,
     )
 
 
@@ -328,6 +352,27 @@ def _dependency_part(metadata: models.Yaml) -> models.Yaml | None:
     return None
 
 
+#: The charm plugin's keys for packages it installs by name, listed in
+#: ``charmcraft.yaml`` itself rather than in a requirements file. The
+#: plugin installs these before the requirements files.
+_CHARM_PLUGIN_PACKAGE_KEYS = ("charm-binary-python-packages", "charm-python-packages")
+
+
+def _find_ops_in_charm_plugin_packages(context: models.CharmContext) -> _OpsDependency | None:
+    """Look for ``ops`` among the packages the charm plugin installs by name."""
+    part = _dependency_part(context.metadata)
+    if part is None or part.get("plugin").value != "charm":
+        return None
+    for key in _CHARM_PLUGIN_PACKAGE_KEYS:
+        for entry in part.get(key).elements or ():
+            if not isinstance(entry.value, str):
+                continue
+            dep = _parse_pep508(entry.value, entry.source, entry.source, entry.line)
+            if dep is not None and not dep.is_test_only:
+                return dep
+    return None
+
+
 def _requirements_files(context: models.CharmContext) -> tuple[tuple[pathlib.Path, str], ...]:
     """Return the requirements files the charm's build plugin actually reads.
 
@@ -356,27 +401,6 @@ def _requirements_files(context: models.CharmContext) -> tuple[tuple[pathlib.Pat
         if declared:
             return declared
     return default
-
-
-#: The charm plugin's keys for packages it installs by name, listed in
-#: ``charmcraft.yaml`` itself rather than in a requirements file. The
-#: plugin installs these before the requirements files.
-_CHARM_PLUGIN_PACKAGE_KEYS = ("charm-binary-python-packages", "charm-python-packages")
-
-
-def _find_ops_in_charm_plugin_packages(context: models.CharmContext) -> _OpsDependency | None:
-    """Look for ``ops`` among the packages the charm plugin installs by name."""
-    part = _dependency_part(context.metadata)
-    if part is None or part.get("plugin").value != "charm":
-        return None
-    for key in _CHARM_PLUGIN_PACKAGE_KEYS:
-        for entry in part.get(key).elements or ():
-            if not isinstance(entry.value, str):
-                continue
-            dep = _parse_pep508(entry.value, entry.source, entry.source, entry.line)
-            if dep is not None and not dep.is_test_only:
-                return dep
-    return None
 
 
 @functools.cache
@@ -479,7 +503,7 @@ class OciImageMissingUpstreamSource(Rule):
 
 
 class OpsDependencyUnpinned(Rule):
-    """Flag an ``ops`` dependency with no version specifier."""
+    """Flag an ``ops`` dependency with no version specifier, or a git reference with no revision."""
 
     category = "SUPPLYCHAIN"
     number = 5
@@ -491,6 +515,19 @@ class OpsDependencyUnpinned(Rule):
         dep = _find_ops_dep(context)
         if dep is None or not dep.is_unpinned:
             return []
+        if dep.floating_git:
+            return [
+                self.diagnostic(
+                    f"ops dependency is a git reference with no revision{dep.where} — "
+                    "it installs whatever the branch holds at build time",
+                    path=dep.source,
+                    line=dep.line,
+                    fix_hint=(
+                        "Pin a commit (`@<sha>` on the URL, or `rev = ...` in Poetry), "
+                        "or depend on a released range, e.g. `ops>=2.23,<4`"
+                    ),
+                )
+            ]
         return [
             self.diagnostic(
                 f"ops dependency has no version specifier{dep.where} — "

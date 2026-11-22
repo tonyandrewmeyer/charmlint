@@ -975,7 +975,7 @@ Flag an `oci-image` resource with no `upstream-source`.
 
 **Warning** — ops dependency has no version specifier
 
-Flag an `ops` dependency with no version specifier.
+Flag an `ops` dependency with no version specifier, or a git reference with no revision.
 
 ### SUPPLYCHAIN-006 ops-dependency-exactly-pinned
 
