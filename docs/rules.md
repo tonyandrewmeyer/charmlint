@@ -894,10 +894,11 @@ qualified key: `api-key`, `private-key`, `ssh-key`,
 hyphen, an underscore or nothing between the two words). A bare
 `key` is not flagged.
 
-An option whose name ends in `secret` is left alone when its
-description says it holds a Juju secret ID or URI, since that is
-already the recommended pattern, and so is an `*-pull-secret`
-option, which names a Kubernetes Secret.
+An option is left alone when its description says it holds a Juju
+secret ID or URI, since that is already the recommended pattern,
+unless the description is pointing at a different option to use
+instead. An `*-pull-secret` option names a Kubernetes Secret, so it
+is left alone too.
 
 Reference: <https://canonical.com/juju/docs/ops/latest/howto/manage-secrets/>
 

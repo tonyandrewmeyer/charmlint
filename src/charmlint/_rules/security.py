@@ -22,10 +22,16 @@ _SECRET_KEYWORD_RE = re.compile(
 # flag, not a credential. 'type: secret' is a Juju secret already.
 _NON_SECRET_TYPES = frozenset({"boolean", "int", "float", "secret"})
 
-# A '*-secret' option whose description says it holds a Juju secret ID
-# or URI is already the recommended pattern: the value is a reference,
-# not the credential.
+# An option whose description says it holds a Juju secret ID or URI is
+# already the recommended pattern: the value is a reference, not the
+# credential. That includes names that don't end in 'secret', such as
+# Kafka's 'tls-private-key' and Ranger's 'ldap-credentials'.
 _SECRET_REFERENCE_RE = re.compile(r"\bsecret[-_ ]?(?:id|uri)s?\b|\bsecret:", re.IGNORECASE)
+
+# A plain-text option often points at its secret-holding replacement
+# ("Deprecated: prefer setting token-secret-id instead"). That mentions a
+# secret ID without being one, so it is still flagged.
+_POINTS_ELSEWHERE_RE = re.compile(r"\b(?:prefer|instead|deprecated)\b", re.IGNORECASE)
 
 # 'image-pull-secret' names a Kubernetes Secret object, not a credential.
 _KUBERNETES_SECRET_NAME_RE = re.compile(r"(?:^|[-_])pull[-_]secrets?$", re.IGNORECASE)
@@ -42,10 +48,11 @@ class SecretInPlainConfig(Rule):
     hyphen, an underscore or nothing between the two words). A bare
     ``key`` is not flagged.
 
-    An option whose name ends in ``secret`` is left alone when its
-    description says it holds a Juju secret ID or URI, since that is
-    already the recommended pattern, and so is an ``*-pull-secret``
-    option, which names a Kubernetes Secret.
+    An option is left alone when its description says it holds a Juju
+    secret ID or URI, since that is already the recommended pattern,
+    unless the description is pointing at a different option to use
+    instead. An ``*-pull-secret`` option names a Kubernetes Secret, so it
+    is left alone too.
     """
 
     category = "SECURITY"
@@ -73,10 +80,12 @@ class SecretInPlainConfig(Rule):
 
 
 def _names_a_secret_object(name: str, option: models.Yaml) -> bool:
-    """Whether a ``*-secret`` option holds a reference to a secret, not the secret itself."""
+    """Whether an option holds a reference to a secret, not the secret itself."""
     if _KUBERNETES_SECRET_NAME_RE.search(name):
         return True
-    if not re.search(r"secrets?$", name, re.IGNORECASE):
-        return False
     description = option.get("description").value
-    return isinstance(description, str) and bool(_SECRET_REFERENCE_RE.search(description))
+    if not isinstance(description, str):
+        return False
+    return bool(_SECRET_REFERENCE_RE.search(description)) and not _POINTS_ELSEWHERE_RE.search(
+        description
+    )

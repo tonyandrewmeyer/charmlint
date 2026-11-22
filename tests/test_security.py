@@ -55,7 +55,16 @@ class TestSecretInPlainConfig:
 
     @pytest.mark.parametrize(
         "option",
-        ["token-timeout", "password_rotation_days", "port", "cache-key", "ssh-key-type", "monkey"],
+        [
+            "token-timeout",
+            "password_rotation_days",
+            "port",
+            "cache-key",
+            "ssh-key-type",
+            "monkey",
+            "db-secret-id",
+            "tls_secret_uri",
+        ],
     )
     def test_keyword_not_at_end_not_flagged(self, tmp_charm: pathlib.Path, option: str):
         _write_charm(tmp_charm, option)
@@ -80,6 +89,8 @@ class TestSecretInPlainConfig:
             ("git_ssh_key_secret", "The SSH key, which must be a Juju secret ID."),
             ("requested-entities-secret", "Secret URI holding the requested entities."),
             ("tls-secret", "A Juju secret URI such as secret:abc123."),
+            ("tls-private-key", "User-provided secret ID which defines the private key."),
+            ("ldap-credentials", "Juju secret ID containing LDAP bind credentials."),
         ],
     )
     def test_secret_reference_not_flagged(
@@ -105,6 +116,26 @@ class TestSecretInPlainConfig:
                         "client-secret": {"type": "string", "description": "The OAuth secret."}
                     }
                 },
+            },
+        )
+        report = lint(tmp_charm)
+        assert "SECURITY-001" in {d.rule_id for d in list(report)}
+
+    @pytest.mark.parametrize(
+        ("option", "description"),
+        [
+            ("token", "The access token. Prefer setting token-secret-id."),
+            ("api-key", "Deprecated: set api-key-secret to a Juju secret URI instead."),
+        ],
+    )
+    def test_plain_option_pointing_at_secret_flagged(
+        self, tmp_charm: pathlib.Path, option: str, description: str
+    ):
+        write_charmcraft_yaml(
+            tmp_charm,
+            {
+                "name": "test",
+                "config": {"options": {option: {"type": "string", "description": description}}},
             },
         )
         report = lint(tmp_charm)
