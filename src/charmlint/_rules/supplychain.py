@@ -58,15 +58,15 @@ class _OpsDependency:
     #: ``tomllib`` discards positions, so a finding there anchors to
     #: the file.
     line: int | None
-    #: Whether it is a direct reference (``ops @ git+https://...``, or a
-    #: Poetry ``git``, ``url`` or ``path`` table) rather than a version
-    #: specifier. There is no ``==`` to replace in one, so it is never
-    #: exactly pinned.
+    # Whether it is a direct reference (``ops @ git+https://...``, or a
+    # Poetry ``git``, ``url`` or ``path`` table) rather than a version
+    # specifier. There is no ``==`` to replace in one, so it is never
+    # exactly pinned.
     direct: bool = False
-    #: Whether it is a git reference with no revision to hold it in place:
-    #: no ``@<ref>`` on the URL, or a Poetry ``git`` table with no ``rev``
-    #: or ``tag`` (a ``branch`` moves). It installs whatever the branch
-    #: holds on the day, which is as unpinned as a dependency gets.
+    # Whether it is a git reference with no revision to hold it in place:
+    # no ``@<ref>`` on the URL, or a Poetry ``git`` table with no ``rev``
+    # or ``tag`` (a ``branch`` moves). It installs whatever the branch
+    # holds on the day, which is as unpinned as a dependency gets.
     floating_git: bool = False
 
     @property
@@ -183,8 +183,8 @@ def _is_floating_git_url(url: str) -> bool:
     return "@" not in path
 
 
-#: Keys of a Poetry dependency table that make it a direct reference
-#: rather than a version requirement.
+# Keys of a Poetry dependency table that make it a direct reference
+# rather than a version requirement.
 _POETRY_DIRECT_KEYS = frozenset({"git", "url", "path", "file"})
 
 
@@ -224,7 +224,7 @@ def _split_extras(extras: str | None) -> tuple[str, ...]:
     return tuple(part for part in stripped if part)
 
 
-#: The ``pyproject.toml`` sections a charm's build installs from.
+# The ``pyproject.toml`` sections a charm's build installs from.
 _RUNTIME_SECTIONS = frozenset({"project.dependencies", "tool.poetry.dependencies"})
 
 
@@ -271,7 +271,7 @@ def _find_ops_in_requirements(
     return _scan_requirements(requirements, name, frozenset())
 
 
-#: A ``-r``/``--requirement`` include line in a requirements file.
+# A ``-r``/``--requirement`` include line in a requirements file.
 _INCLUDE_RE = re.compile(r"^(?:-r\s*|--requirement(?:\s*=\s*|\s+))(?P<path>\S+)")
 
 
@@ -352,9 +352,9 @@ def _dependency_part(metadata: models.Yaml) -> models.Yaml | None:
     return None
 
 
-#: The charm plugin's keys for packages it installs by name, listed in
-#: ``charmcraft.yaml`` itself rather than in a requirements file. The
-#: plugin installs these before the requirements files.
+# The charm plugin's keys for packages it installs by name, listed in
+# ``charmcraft.yaml`` itself rather than in a requirements file. The
+# plugin installs these before the requirements files.
 _CHARM_PLUGIN_PACKAGE_KEYS = ("charm-binary-python-packages", "charm-python-packages")
 
 
