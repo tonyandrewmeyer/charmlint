@@ -49,9 +49,31 @@ class TestNoAssumesJujuVersion:
         )
         assert not _hits(tmp_charm)
 
-    def test_upper_bound_only_suppresses(self, tmp_charm: pathlib.Path):
+    def test_upper_bound_only_flagged(self, tmp_charm: pathlib.Path):
+        # `juju < 4` caps the version; it says nothing about the oldest
+        # controller the charm can run on.
         write_charmcraft_yaml(tmp_charm, {"name": "x", "assumes": ["juju < 4"]})
+        assert len(_hits(tmp_charm)) == 1
+
+    def test_upper_bound_only_mapping_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "x", "assumes": [{"juju": "< 4"}]})
+        assert len(_hits(tmp_charm)) == 1
+
+    def test_upper_and_lower_bound_suppresses(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "x", "assumes": ["juju >= 3.6", "juju < 4"]})
         assert not _hits(tmp_charm)
+
+    def test_string_form_without_spaces_suppresses(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "x", "assumes": ["juju>=3.6"]})
+        assert not _hits(tmp_charm)
+
+    def test_mapping_form_without_spaces_suppresses(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "x", "assumes": [{"juju": ">=3.6"}]})
+        assert not _hits(tmp_charm)
+
+    def test_operator_without_version_flagged(self, tmp_charm: pathlib.Path):
+        write_charmcraft_yaml(tmp_charm, {"name": "x", "assumes": ["juju >="]})
+        assert len(_hits(tmp_charm)) == 1
 
     def test_any_of_group_suppresses(self, tmp_charm: pathlib.Path):
         write_charmcraft_yaml(

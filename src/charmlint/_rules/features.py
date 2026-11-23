@@ -8,6 +8,7 @@ outside the charm.
 
 import ast
 import dataclasses
+import re
 
 from .. import _ast
 from .. import _models as models
@@ -18,24 +19,46 @@ from ._base import Rule
 _GROUP_KEYS = ("any-of", "all-of")
 
 
+# A Juju version expression: the feature name, a comparison operator,
+# and a version. Juju's own parser allows no spaces around the operator
+# as readily as one or more, so `juju>=3.6` is as much a constraint as
+# `juju >= 3.6`.
+_JUJU_EXPRESSION = re.compile(
+    r"juju\s*(?P<op>>=|<=|==|>|<|=)?\s*(?P<version>\S.*)?", re.IGNORECASE
+)
+_VERSION_EXPRESSION = re.compile(r"(?P<op>>=|<=|==|>|<|=)?\s*(?P<version>\S.*)?")
+
+# Only these operators put a floor under the Juju version. `juju < 4`
+# caps it, which says nothing about how old a controller may be.
+_MINIMUM_OPERATORS = frozenset((">=", ">"))
+
+
+def _is_minimum(match: re.Match[str] | None) -> bool:
+    return (
+        match is not None
+        and match.group("op") in _MINIMUM_OPERATORS
+        and match.group("version") is not None
+    )
+
+
 def _is_juju_entry(entry: models.Yaml) -> bool:
-    """Report whether *entry* is a `juju` feature expression.
+    """Report whether *entry* declares a minimum `juju` version.
 
     Both structures mean the same thing to Juju: the flat string form
     (``juju >= 3.6``) and the mapping form (``{juju: ">= 3.6"}``). In
     either form, a bare ``juju`` with nothing after it is not a version
-    constraint, so it does not count.
+    constraint, and nor is an upper bound alone (``juju < 4``), so
+    neither counts.
     """
     value = entry.value
     if isinstance(value, str):
-        head, _, rest = value.strip().partition(" ")
-        return head.lower() == "juju" and bool(rest.strip())
+        return _is_minimum(_JUJU_EXPRESSION.fullmatch(value.strip()))
     if isinstance(value, dict):
         return any(
             isinstance(key, str)
             and key.strip().lower() == "juju"
             and isinstance(val, str)
-            and bool(val.strip())
+            and _is_minimum(_VERSION_EXPRESSION.fullmatch(val.strip()))
             for key, val in value.items()
         )
     return False
@@ -69,8 +92,10 @@ class NoAssumesJujuVersion(Rule):
     The constraint counts wherever it appears — nested inside an
     ``any-of`` or ``all-of`` group as readily as at the top level — and
     in either spelling Juju accepts, the flat ``juju >= 3.6`` and the
-    mapping ``{juju: ">= 3.6"}``. A bare ``juju`` with no version after
-    it constrains nothing and does not count.
+    mapping ``{juju: ">= 3.6"}``, with or without spaces around the
+    operator. A bare ``juju`` with no version after it constrains
+    nothing and does not count, and nor does an upper bound on its own
+    (``juju < 4``), since it says nothing about the oldest controller.
 
     Only charms whose metadata lives in ``charmcraft.yaml`` are
     checked: one still declaring ``name`` in ``metadata.yaml`` predates

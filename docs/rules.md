@@ -544,8 +544,10 @@ which is a much longer walk back to the cause.
 The constraint counts wherever it appears — nested inside an
 `any-of` or `all-of` group as readily as at the top level — and
 in either spelling Juju accepts, the flat `juju >= 3.6` and the
-mapping `{juju: ">= 3.6"}`. A bare `juju` with no version after
-it constrains nothing and does not count.
+mapping `{juju: ">= 3.6"}`, with or without spaces around the
+operator. A bare `juju` with no version after it constrains
+nothing and does not count, and nor does an upper bound on its own
+(`juju < 4`), since it says nothing about the oldest controller.
 
 Only charms whose metadata lives in `charmcraft.yaml` are
 checked: one still declaring `name` in `metadata.yaml` predates
