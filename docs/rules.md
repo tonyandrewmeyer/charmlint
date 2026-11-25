@@ -75,7 +75,7 @@ config file overrides it per rule.
 | [SUPPLYCHAIN-001](#supplychain-001-oci-image-missing-upstream-source) | `oci-image-missing-upstream-source` | Info | oci-image resource declared without an 'upstream-source' |
 | [SUPPLYCHAIN-005](#supplychain-005-ops-dependency-unpinned) | `ops-dependency-unpinned` | Warning | ops dependency has no version specifier |
 | [SUPPLYCHAIN-006](#supplychain-006-ops-dependency-exactly-pinned) | `ops-dependency-exactly-pinned` | Info | ops dependency pinned with `==` |
-| [TESTING-001](#testing-001-no-unit-tests) | `no-unit-tests` | Warning | No unit tests found in tests/unit/ or unit_tests/ |
+| [TESTING-001](#testing-001-no-unit-tests) | `no-unit-tests` | Warning | No unit tests found outside the integration tests |
 | [TESTING-003](#testing-003-uses-harness) | `uses-harness` | Warning | Unit tests use the deprecated ops.testing.Harness |
 | [TESTING-004](#testing-004-uses-ops-scenario) | `uses-ops-scenario` | Warning | Tests depend on ops-scenario instead of ops[testing] |
 
@@ -1037,9 +1037,17 @@ Testing quality.
 
 ### TESTING-001 no-unit-tests
 
-**Warning** — No unit tests found in tests/unit/ or unit_tests/
+**Warning** — No unit tests found outside the integration tests
 
 Check for the presence of unit tests.
+
+Any file pytest collects by default (`test_*.py` or `*_test.py`)
+under `tests/`, `test/` or the reactive-charm `unit_tests/`
+counts, at any depth, except inside an `integration` or `spread`
+directory. So `tests/unit/`, a flat `tests/test_charm.py`,
+`tests/scenario/` and `tests/v0/unit/` all count, as they do for
+TESTING-003. Integration and Spread suites drive a real deployment,
+so they are not unit tests.
 
 ### TESTING-003 uses-harness
 

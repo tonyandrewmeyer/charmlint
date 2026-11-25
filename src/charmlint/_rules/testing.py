@@ -12,12 +12,21 @@ from ._base import Rule
 
 
 class NoUnitTests(Rule):
-    """Check for the presence of unit tests."""
+    """Check for the presence of unit tests.
+
+    Any file pytest collects by default (``test_*.py`` or ``*_test.py``)
+    under ``tests/``, ``test/`` or the reactive-charm ``unit_tests/``
+    counts, at any depth, except inside an ``integration`` or ``spread``
+    directory. So ``tests/unit/``, a flat ``tests/test_charm.py``,
+    ``tests/scenario/`` and ``tests/v0/unit/`` all count, as they do for
+    TESTING-003. Integration and Spread suites drive a real deployment,
+    so they are not unit tests.
+    """
 
     category = "TESTING"
     number = 1
     name = "no-unit-tests"
-    description = "No unit tests found in tests/unit/ or unit_tests/"
+    description = "No unit tests found outside the integration tests"
     default_severity = models.Severity.WARNING
 
     def check(self, context: models.CharmContext) -> list[models.Diagnostic]:

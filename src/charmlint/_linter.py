@@ -3,6 +3,7 @@
 import contextlib
 import dataclasses
 import pathlib
+from collections.abc import Iterator
 
 from . import _ast, _config, _discovery, _noqa, _rules, _selectors, _toml, _yaml
 from . import _models as models
@@ -71,19 +72,31 @@ def _parse_python_modules(
 def _check_tests(charm_dir: pathlib.Path) -> tuple[bool, bool]:
     """Return (has_unit_tests, has_integration_tests).
 
-    Accepts ``tests/unit/`` and the reactive-charm ``unit_tests/`` layout
-    for unit tests, and matches ``test_*.py`` at any depth so nested
-    suites (e.g. ``tests/unit/test_charm/test_charm.py``) count. Only regular
-    files count.
+    A unit test is any regular file that pytest collects by default
+    (``test_*.py`` or ``*_test.py``) under ``tests/``, ``test/`` or the
+    reactive-charm ``unit_tests/``, at any depth, outside an
+    ``integration`` or ``spread`` directory. That covers ``tests/unit/``
+    and the other layouts charms use: a flat ``tests/test_*.py``,
+    ``tests/scenario/``, ``tests/v0/unit/``, and so on. It matches the
+    test tree TESTING-003 examines. Integration and Spread suites drive a
+    real deployment, so they don't count.
     """
-
-    def has_test_file(d: pathlib.Path) -> bool:
-        return d.is_dir() and any(p.is_file() for p in d.rglob("test_*.py"))
-
-    unit_roots = [charm_dir / "tests" / "unit", charm_dir / "unit_tests"]
-    has_unit = any(has_test_file(d) for d in unit_roots)
-    has_integration = has_test_file(charm_dir / "tests" / "integration")
+    unit_roots = [charm_dir / "tests", charm_dir / "test", charm_dir / "unit_tests"]
+    has_unit = any(
+        not ({"integration", "spread"} & set(path.relative_to(root).parts[:-1]))
+        for root in unit_roots
+        for path in _test_files(root)
+    )
+    has_integration = any(True for _ in _test_files(charm_dir / "tests" / "integration"))
     return has_unit, has_integration
+
+
+def _test_files(root: pathlib.Path) -> Iterator[pathlib.Path]:
+    """Yield the regular files under *root* that pytest collects by default."""
+    if not root.is_dir():
+        return
+    for pattern in ("test_*.py", "*_test.py"):
+        yield from (path for path in root.rglob(pattern) if path.is_file())
 
 
 def build_context(charm_dir: pathlib.Path) -> models.CharmContext:

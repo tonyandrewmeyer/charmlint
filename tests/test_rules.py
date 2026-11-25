@@ -420,6 +420,43 @@ class TestTestingRules:
         report = lint(tmp_charm)
         assert "TESTING-001" not in {d.rule_id for d in list(report)}
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "tests/test_charm.py",
+            "tests/scenario/test_charm.py",
+            "tests/v0/unit/test_lib.py",
+            "tests/manager/test_workload.py",
+            "tests/unit/charm_test.py",
+            "test/unit/test_charm.py",
+        ],
+    )
+    def test_other_unit_test_layouts_no_diagnostic(self, tmp_charm: pathlib.Path, path: str):
+        write_charmcraft_yaml(tmp_charm, {"name": "test-charm"})
+        test_file = tmp_charm / path
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("def test_x(): pass\n")
+        report = lint(tmp_charm)
+        assert "TESTING-001" not in {d.rule_id for d in list(report)}
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "tests/integration/test_charm.py",
+            "tests/v0/integration/test_lib.py",
+            "tests/spread/test_charm.py",
+            "tests/conftest.py",
+            "tests/helpers.py",
+        ],
+    )
+    def test_only_non_unit_tests_is_reported(self, tmp_charm: pathlib.Path, path: str):
+        write_charmcraft_yaml(tmp_charm, {"name": "test-charm"})
+        test_file = tmp_charm / path
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("def test_x(): pass\n")
+        report = lint(tmp_charm)
+        assert "TESTING-001" in {d.rule_id for d in list(report)}
+
 
 def _vendor_lib(charm_dir: pathlib.Path, owner: str, version: str, lib: str) -> pathlib.Path:
     """Simulate ``charmcraft fetch-lib`` by dropping a stub into lib/charms/."""
